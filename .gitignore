@@ -1,0 +1,37 @@
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# ── Virtual environment ───────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Streamlit ─────────────────────────────────────────────────────────────────
+# (keep .streamlit/config.toml — it's small and needed)
+
+# ── Local tool files ──────────────────────────────────────────────────────────
+context.xml
+.claude/
+
+# ── Validation / dev-only folders ─────────────────────────────────────────────
+VAL/
+validation/
+
+# ── Large data files tracked via Git LFS (see .gitattributes) ─────────────────
+# hp.obo is fetched automatically at runtime — do NOT commit it
+Input/hp.obo
+
+# ── OS / editor noise ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/

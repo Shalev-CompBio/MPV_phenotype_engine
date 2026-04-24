@@ -1,0 +1,6 @@
+pandas>=2.0
+openpyxl>=3.1        # xlsx reading
+pronto>=2.5          # HPO ontology parsing
+scipy>=1.10          # entropy computation
+streamlit>=1.35      # app.py UI
+reportlab>=4.0       # PDF clinical summary export (P3-B)

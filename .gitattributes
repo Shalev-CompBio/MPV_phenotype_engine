@@ -1,0 +1,2 @@
+# Git LFS — track large binary data files
+Input/*.xlsx filter=lfs diff=lfs merge=lfs -text
