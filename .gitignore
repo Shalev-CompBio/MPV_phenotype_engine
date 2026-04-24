@@ -24,10 +24,6 @@ context.xml
 VAL/
 validation/
 
-# ── Large data files tracked via Git LFS (see .gitattributes) ─────────────────
-# hp.obo is fetched automatically at runtime — do NOT commit it
-Input/hp.obo
-
 # ── OS / editor noise ────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
