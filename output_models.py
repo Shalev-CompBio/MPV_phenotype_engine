@@ -19,6 +19,7 @@ class GeneCandidate:
     npp_score: float | None         # None until NPP data available
     score_breakdown: list[tuple[str, float]] = field(default_factory=list)
     stability_breakdown: tuple[str, float, float] | None = None
+    leak_breakdown: list[tuple[str, float]] = field(default_factory=list)
 
 
 @dataclass

@@ -39,6 +39,7 @@ class ClinicalSupportEngine:
         self,
         data_dir: str | Path | None = None,
         eager: bool = False,
+        gamma: float = 0.3,
     ) -> None:
         self._data_dir = Path(data_dir) if data_dir else _DEFAULT_DATA_DIR
         self._dl: DataLoader | None = None
@@ -46,6 +47,7 @@ class ClinicalSupportEngine:
         self._se: ScoringEngine | None = None
         self._gr: GeneRanker | None = None
         self._pe: PredictionEngine | None = None
+        self._gamma = gamma
 
         if eager:
             self._init()
@@ -57,7 +59,7 @@ class ClinicalSupportEngine:
         self._dl = DataLoader(str(self._data_dir))
         self._ht = HPOTraversal(self._data_dir / "hp.obo", self._dl.ird_terms)
         self._se = ScoringEngine(self._dl, self._ht)
-        self._gr = GeneRanker(self._dl, self._ht)
+        self._gr = GeneRanker(self._dl, self._ht, gamma=self._gamma)
         self._pe = PredictionEngine(self._dl, self._ht, self._se)
 
     # ------------------------------------------------------------------

@@ -5,37 +5,29 @@ Ranks candidate genes within the top-ranked disease module.
 Design decisions
 ----------------
 Score formula:
-    phenotype_score = sum(get_prevalence(hpo, module) for hpo in
-                         (observed ∩ gene_hpo_profile))
-                    / max(total_observed_prevalence, DENOM_FLOOR)
+    A(g, h) = 1_{h in G_h} + (1 - 1_{h in G_h}) * gamma * psi(g)
+    score = sum(A(g, h) * p(h, m)) / sum(p(h, m) for h in observed)
 
-    This is a weighted Jaccard-like overlap: we credit each matching term
-    by how prevalent it is in the module (more specific terms contribute
-    more), normalized by the total prevalence mass of the query.
+    This Soft Module-Aware (SMA-GS) formula replaces binary annotation
+    lookup with an affinity function. Genes receive full credit for
+    direct annotations (exact match) and partial "leakage" credit for
+    other module symptoms based on their coherence gate psi(g) and the
+    global leakage parameter gamma.
 
-    If observed is empty, phenotype_score = 0 for all genes.
+    If observed is empty, score = 0 for all genes.
 
-Stability modifier:
-    stability_modifier = stability_score * STABILITY_WEIGHT * direction
-    where direction:
-        core       -> +1.0
-        peripheral ->  0.0  (neutral; scored on phenotype match alone)
-        unstable   -> -1.0
-
-    STABILITY_WEIGHT = 0.2 keeps the modifier in [-0.2, +0.2] while
-    phenotype_score is in [0, 1].  Core genes with no phenotype match
-    still get a small positive lift; unstable genes are mildly penalized.
-
-Final score:
-    score = phenotype_score + stability_modifier
+Coherence Gate psi(g):
+    core       -> 1.0
+    peripheral -> 0.5
+    unstable   -> 0.0
 
 Supporting phenotypes:
-    The observed terms that overlap with the gene's annotated HPO profile,
-    sorted descending by module prevalence.
+    The observed terms that the gene actually has annotated (exact matches),
+    sorted descending by module prevalence. Leakage terms are excluded.
 
 NPP slot:
     GeneCandidate.npp_score is set to None until npp_scores.csv is
-    available.  When it is, gene_ranker will be extended to include:
+    available. When it is, gene_ranker will be extended to include:
         score = lambda1 * phenotype_score + lambda2 * npp_score
 """
 
@@ -45,23 +37,46 @@ from output_models import GeneCandidate
 from data_loader import DataLoader
 from hpo_traversal import HPOTraversal
 
-# Weight applied to the stability modifier so it stays in [-0.2, 0.2]
-STABILITY_WEIGHT = 0.2
-
 # Floor for the normalization denominator (prevents division by zero)
 DENOM_FLOOR = 1e-9
 
-_STABILITY_DIRECTION: dict[str, float] = {
+DEFAULT_GAMMA = 0.3
+
+_COHERENCE_GATE: dict[str, float] = {
     "core": 1.0,
-    "peripheral": 0.0,
-    "unstable": -1.0,
+    "peripheral": 0.5,
+    "unstable": 0.0,
 }
 
 
 class GeneRanker:
-    def __init__(self, data_loader: DataLoader, hpo_traversal: HPOTraversal) -> None:
+    def __init__(
+        self,
+        data_loader: DataLoader,
+        hpo_traversal: HPOTraversal,
+        gamma: float = DEFAULT_GAMMA,
+    ) -> None:
         self._dl = data_loader
         self._ht = hpo_traversal
+        self._gamma = gamma
+
+    def _coherence_gate(self, classification: str) -> float:
+        """ψ(g): how representative this gene is of its module."""
+        return _COHERENCE_GATE.get(classification, 0.0)
+
+    def _compute_affinity(
+        self,
+        is_annotated: bool,
+        psi: float,
+    ) -> tuple[float, float]:
+        """Return (exact_part, leak_part) of A(g, h).
+
+        A(g, h) = exact_part + leak_part
+                = 1_{h in G_h} + (1 - 1_{h in G_h}) * gamma * psi
+        """
+        if is_annotated:
+            return 1.0, 0.0
+        return 0.0, self._gamma * psi
 
     def rank_genes(
         self,
@@ -95,31 +110,45 @@ class GeneRanker:
             info = self._dl.gene_info[gene]
             gene_hpos = self._dl.gene_hpo.get(gene, set())
 
-            # Matching terms
-            matching = observed_set & gene_hpos
-            
-            # Step 2 — Compute breakdown
-            breakdown = []
-            match_prev = 0.0
-            for hpo in matching:
-                p = self._dl.get_prevalence(hpo, module_id)
-                match_prev += p
-                contrib = p / total_obs_prev
-                breakdown.append((self._dl.hpo_name.get(hpo, hpo), contrib))
-            
-            breakdown.sort(key=lambda x: x[1], reverse=True)
-            phenotype_score = match_prev / total_obs_prev
-
-            # Stability modifier
             classification = info["classification"]
-            direction = _STABILITY_DIRECTION.get(classification, 0.0)
-            stability_score = info["stability_score"]
-            modifier_value = stability_score * STABILITY_WEIGHT * direction
+            psi = self._coherence_gate(classification)
 
-            score = phenotype_score + modifier_value
+            breakdown: list[tuple[str, float]] = []
+            leak_breakdown: list[tuple[str, float]] = []
+            weighted_affinity = 0.0
 
-            # Supporting phenotypes: matching HPO terms, sorted by module prevalence
-            supporting_names = [name for name, _ in breakdown]
+            for hpo in observed_set:
+                p = self._dl.get_prevalence(hpo, module_id)
+                if p <= 0.0:
+                    continue
+
+                is_annotated = hpo in gene_hpos
+                exact_part, leak_part = self._compute_affinity(is_annotated, psi)
+                affinity = exact_part + leak_part
+                if affinity <= 0.0:
+                    continue
+
+                contrib = affinity * p / total_obs_prev
+                weighted_affinity += affinity * p
+
+                term_name = self._dl.hpo_name.get(hpo, hpo)
+                breakdown.append((term_name, contrib))
+
+                if leak_part > 0.0:
+                    leak_contrib = leak_part * p / total_obs_prev
+                    leak_breakdown.append((term_name, leak_contrib))
+
+            breakdown.sort(key=lambda x: x[1], reverse=True)
+            leak_breakdown.sort(key=lambda x: x[1], reverse=True)
+
+            phenotype_score = weighted_affinity / total_obs_prev
+            score = phenotype_score
+
+            gate_contribution = sum(c for _, c in leak_breakdown)
+            supporting_names = [
+                name for name, _ in breakdown
+                if name not in {n for n, _ in leak_breakdown}
+            ]
 
             candidates.append(GeneCandidate(
                 gene=gene,
@@ -128,7 +157,8 @@ class GeneRanker:
                 supporting_phenotypes=supporting_names,
                 npp_score=None,
                 score_breakdown=breakdown,
-                stability_breakdown=(classification, stability_score, modifier_value),
+                stability_breakdown=(classification, psi, round(gate_contribution, 6)),
+                leak_breakdown=leak_breakdown,
             ))
 
         candidates.sort(key=lambda c: c.score, reverse=True)

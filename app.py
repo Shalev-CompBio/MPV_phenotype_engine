@@ -602,10 +602,24 @@ def _ig_tooltip(ig: float) -> str:
     )
 
 @st.cache_resource(show_spinner="Loading IRD knowledge base — this takes ~30 s on first load…")
-def _load_engine() -> ClinicalSupportEngine:
-    return ClinicalSupportEngine(eager=True)
+def _load_engine(gamma: float = 0.3) -> ClinicalSupportEngine:
+    return ClinicalSupportEngine(eager=True, gamma=gamma)
 
-engine = _load_engine()
+# Sidebar settings for gamma
+with st.sidebar:
+    st.divider()
+    st.subheader("Engine Parameters")
+    gamma_val = st.slider(
+        "Module leakage (γ)",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.3,
+        step=0.05,
+        help="Controls 'leakage' credit from module symptoms to genes without direct annotations. "
+             "γ=0 is strict matching; γ=1 is full module-wide credit for core genes."
+    )
+
+engine = _load_engine(gamma=gamma_val)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Autocomplete option lists — built once from engine data
@@ -1179,18 +1193,33 @@ def _render_gene_breakdown(gene) -> None:
 
     stab_html = ""
     if gene.stability_breakdown:
-        _, raw_score, modifier = gene.stability_breakdown
+        _, psi, mod = gene.stability_breakdown
         stab_html = f"""
         <div style="margin-top:.65rem;padding:.75rem;border-radius:12px;border:1px solid var(--border);background:{stability['bg']};">
-          <div style="font-size:14px;font-weight:700;color:{stability['color']};">{_esc(stability['label'])}</div>
+          <div style="font-size:14px;font-weight:700;color:{stability['color']};">{_esc(stability['label'])} (ψ={psi:.2f})</div>
           <div style="display:flex;justify-content:space-between;margin-top:.45rem;font-size:12px;color:var(--ink3);">
-            <span>Raw stability score</span>
-            <span class="mono" style="font-weight:700;color:{stability['color']};">{raw_score:.2f}</span>
+            <span>Module-aware credit (imputed)</span>
+            <span class="mono" style="font-weight:700;color:{stability['color']};">+{mod:.4f}</span>
           </div>
-          <div style="display:flex;justify-content:space-between;margin-top:.2rem;font-size:12px;color:var(--ink3);">
-            <span>Score modifier</span>
-            <span class="mono" style="font-weight:700;color:{'var(--teal)' if modifier > 0 else 'var(--red)' if modifier < 0 else 'var(--ink3)'};">{modifier:+.2f}</span>
-          </div>
+        </div>
+        """
+
+    leak_html = ""
+    if gene.leak_breakdown:
+        leak_rows = []
+        for name, contrib in gene.leak_breakdown:
+            leak_rows.append(
+                f"""
+                <div style="display:flex;align-items:center;gap:.55rem;margin-top:.45rem;">
+                  <div style="flex:1;font-size:11px;color:var(--ink3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{_esc(name)}</div>
+                  <div class="mono" style="width:56px;text-align:right;font-size:11px;font-weight:600;color:var(--ink3);">+{contrib:.4f}</div>
+                </div>
+                """
+            )
+        leak_html = f"""
+        <div style="margin-top:1rem;">
+          <div class="label" style="font-size:10px;">Module-extrapolated (leak)</div>
+          {''.join(leak_rows)}
         </div>
         """
 
@@ -1206,13 +1235,14 @@ def _render_gene_breakdown(gene) -> None:
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.2rem;">
             <div>
               <div class="label">Phenotype Contributions To Score</div>
-              {''.join(left_items) if left_items else '<div style="margin-top:.65rem;font-size:12px;color:var(--ink3);">No phenotype overlap; ranking is driven by stability.</div>'}
+              {''.join(left_items) if left_items else '<div style="margin-top:.65rem;font-size:12px;color:var(--ink3);">No direct phenotype overlap.</div>'}
+              {leak_html}
             </div>
             <div>
               <div class="label">Cluster Stability Modifier</div>
               {stab_html}
               <div style="margin-top:.7rem;padding:.75rem;border-radius:12px;border:1px solid var(--border);background:white;">
-                <div style="font-size:12px;color:var(--ink3);">phenotype overlap + stability modifier</div>
+                <div style="font-size:12px;color:var(--ink3);">phenotype overlap + module credit</div>
                 <div style="display:flex;align-items:baseline;gap:.45rem;margin-top:.25rem;">
                   <span style="font-family:Outfit,sans-serif;font-size:1.35rem;font-weight:800;color:var(--ink);">{gene.score:.4f}</span>
                   <span style="font-size:12px;color:var(--ink3);">final score</span>
@@ -1828,7 +1858,7 @@ def _render_result(
                 g = gene_map[selected_gene_name]
                 with st.expander(f"Score breakdown — {g.gene}", expanded=False):
                     if not g.score_breakdown:
-                        st.write("*No phenotype overlap with query — ranked by stability only.*")
+                        st.write("*No phenotype overlap with query — score is 0 for this gene.*")
                     else:
                         st.markdown("**Phenotype contributions:**")
                         # Show as a mini table
@@ -1839,10 +1869,17 @@ def _render_result(
                         st.table(breakdown_data)
 
                     if g.stability_breakdown:
-                        cls, raw, mod = g.stability_breakdown
+                        cls, psi, mod = g.stability_breakdown
                         label = _get_stability_icon(cls).split(" ", 1)[1] # remove icon
-                        sign = "+" if mod >= 0 else ""
-                        st.markdown(f"**Stability ({label}, {raw:.2f}):** `{sign}{mod:.2f}`")
+                        st.markdown(f"**Stability ({label}, ψ={psi:.2f}):** module credit `+{mod:.4f}`")
+
+                    if g.leak_breakdown:
+                        st.markdown("**Module-extrapolated contributions (leak):**")
+                        leak_data = [
+                            {"Phenotype": name, "Imputed Credit": f"+{contrib:.4f}"}
+                            for name, contrib in g.leak_breakdown
+                        ]
+                        st.table(leak_data)
 
                     st.markdown("---")
                     st.markdown(f"**Total score:** `{g.score:.4f}`")
