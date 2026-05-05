@@ -33,9 +33,13 @@ NPP slot:
 
 from __future__ import annotations
 
+import pandas as pd
+
 from output_models import GeneCandidate
 from data_loader import DataLoader
 from hpo_traversal import HPOTraversal
+
+from ethnicity_prior_policy import EthnicityPriorPolicy, apply_ethnicity_policy
 
 # Floor for the normalization denominator (prevents division by zero)
 DENOM_FLOOR = 1e-9
@@ -55,10 +59,16 @@ class GeneRanker:
         data_loader: DataLoader,
         hpo_traversal: HPOTraversal,
         gamma: float = DEFAULT_GAMMA,
+        lr_matrix: pd.DataFrame | None = None,
+        count_matrix: pd.DataFrame | None = None,
+        ebl_policy: EthnicityPriorPolicy | None = None,
     ) -> None:
         self._dl = data_loader
         self._ht = hpo_traversal
         self._gamma = gamma
+        self._lr_matrix = lr_matrix
+        self._count_matrix = count_matrix
+        self._ebl_policy = ebl_policy or EthnicityPriorPolicy.default()
 
     def _coherence_gate(self, classification: str) -> float:
         """ψ(g): how representative this gene is of its module."""
@@ -82,6 +92,8 @@ class GeneRanker:
         self,
         module_id: int,
         observed: list[str],
+        ethnicity_group: str | None = None,
+        use_ethnicity_prior: bool | None = None,
     ) -> list[GeneCandidate]:
         """Rank all genes in module_id by phenotype overlap + stability.
 
@@ -142,7 +154,21 @@ class GeneRanker:
             leak_breakdown.sort(key=lambda x: x[1], reverse=True)
 
             phenotype_score = weighted_affinity / total_obs_prev
-            score = phenotype_score
+
+            # Evaluate ethnicity prior via policy layer
+            decision = None
+            if use_ethnicity_prior and ethnicity_group:
+                 decision = apply_ethnicity_policy(
+                     gene=gene,
+                     ethnicity=ethnicity_group,
+                     lr_matrix=self._lr_matrix,
+                     count_matrix=self._count_matrix,
+                     policy=self._ebl_policy
+                 )
+
+            # Default to no change if layer is off or decision not applied
+            effective_lr = decision.effective_lr if decision else 1.0
+            score = phenotype_score * effective_lr
 
             gate_contribution = sum(c for _, c in leak_breakdown)
             supporting_names = [
@@ -159,6 +185,10 @@ class GeneRanker:
                 score_breakdown=breakdown,
                 stability_breakdown=(classification, psi, round(gate_contribution, 6)),
                 leak_breakdown=leak_breakdown,
+                ethnicity_lr_raw=round(decision.raw_lr, 4) if decision else None,
+                ethnicity_lr_effective=round(decision.effective_lr, 4) if decision else None,
+                ethnicity_count_n=decision.count_n if decision else None,
+                ethnicity_rule_reason=decision.reason_code if decision else None,
             ))
 
         candidates.sort(key=lambda c: c.score, reverse=True)

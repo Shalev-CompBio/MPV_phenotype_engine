@@ -23,8 +23,15 @@ context.xml
 # ── Validation / dev-only folders ─────────────────────────────────────────────
 VAL/
 validation/
+validation_v2/
 
-# ── OS / editor noise ────────────────────────────────────────────────────────
+# ── Archive and summary files ─────────────────────────────────────────────────
+archives.ignore/
+Logo/
+
+# ── Ethnicity layer logs and reports ──────────────────────────────────────────
+ethnicity_bayes_layer/*.log
+ethnicity_bayes_layer/*report.txt
 .DS_Store
 Thumbs.db
 *.swp

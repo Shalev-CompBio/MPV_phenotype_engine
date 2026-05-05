@@ -20,6 +20,19 @@ class GeneCandidate:
     score_breakdown: list[tuple[str, float]] = field(default_factory=list)
     stability_breakdown: tuple[str, float, float] | None = None
     leak_breakdown: list[tuple[str, float]] = field(default_factory=list)
+    ethnicity_lr_raw: float | None = None       # EBL raw LR
+    ethnicity_lr_effective: float | None = None # applied EBL multiplier; None = layer off
+    ethnicity_count_n: float | None = None      # count of training cases
+    ethnicity_rule_reason: str | None = None    # transparent rule application reason
+
+
+@dataclass
+class DiscoverySuggestion:
+    """Track 2: a gene absent from the primary module set with significant ethnic signal."""
+    gene: str
+    sources: list[str]              # e.g. ["EBL"]
+    source_metadata: dict           # e.g. {"EBL": {"lr": 3.38, "n": 15, "ethnicity": "North_African_Jewish"}}
+    is_master_candidate: bool = False   # True when ≥2 evidence sources agree
 
 
 @dataclass

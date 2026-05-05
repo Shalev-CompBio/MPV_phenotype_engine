@@ -35,11 +35,15 @@ class Session:
         scoring_engine: ScoringEngine,
         gene_ranker: GeneRanker,
         prediction_engine: PredictionEngine,
+        ethnicity_group: str = "",
+        use_ethnicity_prior: bool = False,
     ) -> None:
         self._dl = data_loader
         self._se = scoring_engine
         self._gr = gene_ranker
         self._pe = prediction_engine
+        self._ethnicity_group = ethnicity_group
+        self._use_ethnicity_prior = use_ethnicity_prior
 
         self.observed: list[str] = []
         self.excluded: list[str] = []
@@ -72,6 +76,8 @@ class Session:
         return _build_result(
             self._dl, self._se, self._gr, self._pe,
             self.observed, self.excluded,
+            ethnicity_group=self._ethnicity_group,
+            use_ethnicity_prior=self._use_ethnicity_prior,
         )
 
     def reset(self) -> None:

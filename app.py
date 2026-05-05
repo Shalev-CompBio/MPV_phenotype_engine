@@ -8,6 +8,7 @@ Run:
     streamlit run app.py
 """
 from __future__ import annotations
+import base64
 import html
 import io
 import os
@@ -15,11 +16,69 @@ import numpy as np
 # Last Updated: 2026-04-13 10:28 (Updated to all-HPO April 2026 baseline) # module_all_HPO_background_comparison_20260413_1019
 import sys
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import math
+from PIL import Image, ImageDraw
 
 from clinical_support import ClinicalSupportEngine
 from prediction_engine import ig_qualitative_label
+
+_FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">'
+    '<rect width="120" height="120" rx="18" fill="#080d14"/>'
+    '<circle cx="60" cy="60" r="52" fill="none" stroke="#00c8b4" stroke-width="1"'
+    ' stroke-opacity="0.3" stroke-dasharray="4 8"/>'
+    '<circle cx="60" cy="60" r="38" fill="none" stroke="#00c8b4" stroke-width="1.4"'
+    ' stroke-opacity="0.55" stroke-dasharray="22 6"/>'
+    '<circle cx="60" cy="60" r="24" fill="none" stroke="#f59e3a" stroke-width="1.8"'
+    ' stroke-opacity="0.7" stroke-dasharray="12 5"/>'
+    '<circle cx="60" cy="22" r="3.5" fill="#00c8b4"/>'
+    '<circle cx="93" cy="41" r="3" fill="#00c8b4" opacity="0.7"/>'
+    '<circle cx="93" cy="79" r="3" fill="#f59e3a"/>'
+    '<circle cx="60" cy="98" r="3.5" fill="#f59e3a"/>'
+    '<circle cx="27" cy="79" r="3" fill="#f59e3a" opacity="0.7"/>'
+    '<circle cx="27" cy="41" r="3" fill="#00c8b4" opacity="0.7"/>'
+    '<circle cx="60" cy="60" r="7" fill="#00c8b4"/>'
+    '<circle cx="60" cy="60" r="2.5" fill="#fff" opacity="0.95"/>'
+    '</svg>'
+)
+_FAVICON_DATA_URI = (
+    "data:image/svg+xml;base64,"
+    f"{base64.b64encode(_FAVICON_SVG.encode()).decode()}"
+)
+
+
+def _build_favicon_png() -> io.BytesIO:
+    img = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle((0, 0, 128, 128), radius=19, fill="#080d14")
+
+    def _circle(cx, cy, r, outline=None, width=1, fill=None):
+        draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=outline, width=width, fill=fill)
+
+    _circle(64, 64, 55, outline="#285a5a", width=2)
+    _circle(64, 64, 41, outline="#168d86", width=2)
+    _circle(64, 64, 26, outline="#b56f25", width=3)
+    for x, y, r, color in (
+        (64, 24, 4, "#00c8b4"),
+        (99, 44, 3, "#00c8b4"),
+        (99, 84, 3, "#f59e3a"),
+        (64, 104, 4, "#f59e3a"),
+        (29, 84, 3, "#f59e3a"),
+        (29, 44, 3, "#00c8b4"),
+    ):
+        _circle(x, y, r, fill=color)
+    _circle(64, 64, 8, fill="#00c8b4")
+    _circle(64, 64, 3, fill="#ffffff")
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+
+_FAVICON_PNG = _build_favicon_png()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Page config — MUST be the first Streamlit call in the file
@@ -27,7 +86,7 @@ from prediction_engine import ig_qualitative_label
 
 st.set_page_config(
     page_title="MPV Phenotype Engine",
-    page_icon="🔬",
+    page_icon=_FAVICON_PNG,
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -47,6 +106,28 @@ if "_query_observed_pending" not in st.session_state:
     st.session_state._query_observed_pending = None
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Favicon — Icon · Compact SVG mark injected as base64 data URI.
+# Overrides the emoji page_icon set in set_page_config in all modern browsers.
+# ─────────────────────────────────────────────────────────────────────────────
+components.html(
+    f"""
+    <script>
+      try {{
+        const href = {_FAVICON_DATA_URI!r};
+        const doc = window.parent.document;
+        doc.querySelectorAll('link[rel~="icon"], link[rel="shortcut icon"]').forEach((el) => el.remove());
+        const link = doc.createElement('link');
+        link.rel = 'icon';
+        link.type = 'image/svg+xml';
+        link.href = href;
+        doc.head.appendChild(link);
+      }} catch (err) {{}}
+    </script>
+    """,
+    height=0,
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
 # CSS — injected once at startup
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -61,6 +142,20 @@ st.markdown("""
 [data-testid="stSidebar"] .stMarkdown p,
 [data-testid="stSidebar"] .stCaption,
 [data-testid="stSidebar"] small { color: #b8d0e8 !important; }
+
+/* ===== NEW: checkbox text always white ===== */
+[data-testid="stSidebar"] [data-testid="stCheckbox"] label p {
+    color: #ffffff !important;
+}
+[data-testid="stSidebar"] [data-testid="stCheckbox"] label {
+    opacity: 1 !important;
+}
+[data-testid="stSidebar"] [data-testid="stCheckbox"] input:disabled + div + div p {
+    color: #ffffff !important;
+    opacity: 1 !important;
+}
+/* ===== END NEW ===== */
+
 [data-testid="stSidebar"] h1,
 [data-testid="stSidebar"] h2,
 [data-testid="stSidebar"] h3 { color: #e8f2fb !important; }
@@ -353,7 +448,15 @@ st.markdown(
     [data-testid="stSidebar"] .sidebar-sub {
         font-size: 0.76rem;
         line-height: 1.5;
-        color: #3a6485 !important;
+        color: #7fa8c4 !important;
+    }
+    [data-testid="stSidebar"] .sidebar-logo-wrap {
+        padding: .3rem 0 .15rem 0;
+        margin-bottom: .15rem;
+    }
+    [data-testid="stSidebar"] .sidebar-logo-wrap svg {
+        display: block;
+        max-height: 84px;
     }
     [data-testid="stSidebar"] hr {
         border-color: var(--nav-border) !important;
@@ -467,6 +570,28 @@ st.markdown(
     .page-head {
         margin-bottom: 1.1rem;
     }
+    .page-head-inner {
+        display: flex;
+        align-items: center;
+        gap: .75rem;
+    }
+    .page-head-mark {
+        width: 34px;
+        height: 34px;
+        flex: 0 0 34px;
+        border-radius: 10px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #ffffff;
+        border: 1px solid var(--border);
+        box-shadow: 0 6px 18px rgba(13,33,55,.08);
+    }
+    .page-head-mark svg {
+        width: 24px;
+        height: 24px;
+        display: block;
+    }
     .page-head h1 {
         font-size: 24px !important;
         font-weight: 800 !important;
@@ -500,11 +625,97 @@ st.markdown(
         letter-spacing: .08em;
         color: var(--ink3);
     }
+    .section-title {
+        margin: .1rem 0 .2rem 0;
+        color: var(--ink);
+        font-size: 13px;
+        font-weight: 800;
+        line-height: 1.35;
+    }
+    .section-subtitle {
+        margin: 0 0 .15rem 0;
+        color: var(--ink2);
+        font-size: 13px;
+        font-weight: 650;
+        line-height: 1.45;
+    }
+    .section-copy {
+        margin: 0 0 .9rem 0;
+        color: var(--ink3);
+        font-size: 12px;
+        line-height: 1.65;
+    }
+    .case-load-notice {
+        display: flex;
+        align-items: center;
+        gap: .85rem;
+        margin: -.35rem 0 1.05rem 0;
+        padding: .75rem .95rem;
+        border: 1px solid #bfece4;
+        border-left: 4px solid var(--teal);
+        border-radius: 10px;
+        background: linear-gradient(180deg, #f7fffd 0%, #eefbf8 100%);
+        box-shadow: 0 8px 22px rgba(13,33,55,.08);
+    }
+    .case-load-notice.error {
+        border-color: #f3c3bd;
+        border-left-color: var(--red);
+        background: linear-gradient(180deg, #fffafa 0%, #fff1ef 100%);
+    }
+    .case-load-mark {
+        width: 38px;
+        height: 38px;
+        flex: 0 0 38px;
+        border-radius: 11px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #080d14;
+        box-shadow: 0 8px 18px rgba(8,13,20,.18);
+    }
+    .case-load-mark svg {
+        width: 28px;
+        height: 28px;
+        display: block;
+    }
+    .case-load-body {
+        min-width: 0;
+    }
+    .case-load-kicker {
+        color: var(--teal);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: .08em;
+        text-transform: uppercase;
+    }
+    .case-load-title {
+        color: var(--ink);
+        font-size: 14px;
+        font-weight: 800;
+        line-height: 1.35;
+        margin-top: .08rem;
+    }
+    .case-load-meta {
+        color: var(--ink3);
+        font-size: 12px;
+        line-height: 1.45;
+        margin-top: .12rem;
+    }
     .explain-text {
         font-size: 12px;
         line-height: 1.65;
         color: var(--ink3);
         margin: 0.15rem 0 0.9rem 0;
+    }
+    .soft-note {
+        margin: .2rem 0 .1rem 0;
+        color: var(--ink3);
+        font-size: 12px;
+        line-height: 1.55;
+    }
+    .soft-note strong {
+        color: var(--ink);
+        font-weight: 700;
     }
     .chip-container {
         display: flex;
@@ -546,6 +757,18 @@ st.markdown(
         .topbar {
             flex-direction: column;
             align-items: flex-start;
+        }
+        .page-head-inner {
+            align-items: flex-start;
+        }
+        .page-head-mark {
+            width: 30px;
+            height: 30px;
+            flex-basis: 30px;
+        }
+        .page-head-mark svg {
+            width: 21px;
+            height: 21px;
         }
     }
     </style>
@@ -601,25 +824,224 @@ def _ig_tooltip(ig: float) -> str:
         "Thresholds: High ≥ 0.8 nats, Moderate 0.3–0.8 nats, Low < 0.3 nats."
     )
 
-@st.cache_resource(show_spinner="Loading IRD knowledge base — this takes ~30 s on first load…")
-def _load_engine(gamma: float = 0.3) -> ClinicalSupportEngine:
-    return ClinicalSupportEngine(eager=True, gamma=gamma)
+st.markdown(
+    f"""
+    <style>
+    .stSpinner,
+    [data-testid="stSpinner"] {{
+        position: relative;
+        min-height: 76px;
+        max-width: 520px;
+        margin: .35rem 0 1rem 0;
+        padding: 18px 22px 18px 82px;
+        border: 1px solid #cfe0ee;
+        border-radius: 12px;
+        background: linear-gradient(180deg, #f8fbff 0%, #edf5fb 100%);
+        box-shadow: 0 12px 30px rgba(13,33,55,.10);
+        color: #0d2137;
+        overflow: hidden;
+    }}
+    .stSpinner::before,
+    [data-testid="stSpinner"]::before {{
+        content: "";
+        position: absolute;
+        left: 20px;
+        top: 50%;
+        width: 42px;
+        height: 42px;
+        transform: translateY(-50%);
+        border-radius: 12px;
+        background: #080d14 url("{_FAVICON_DATA_URI}") center / 34px 34px no-repeat;
+        box-shadow: 0 8px 18px rgba(8,13,20,.20);
+    }}
+    .stSpinner::after,
+    [data-testid="stSpinner"]::after {{
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 4px;
+        background: linear-gradient(180deg, #009b8c 0%, #d4820a 100%);
+    }}
+    .stSpinner p,
+    [data-testid="stSpinner"] p,
+    .stSpinner div,
+    [data-testid="stSpinner"] div {{
+        color: #0d2137 !important;
+        font-family: "Outfit", sans-serif !important;
+        font-size: 15px !important;
+        font-weight: 700 !important;
+        line-height: 1.45 !important;
+    }}
+    .stSpinner svg:not([aria-hidden="true"]),
+    [data-testid="stSpinner"] svg:not([aria-hidden="true"]) {{
+        color: #009b8c !important;
+    }}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-# Sidebar settings for gamma
+@st.cache_resource(show_spinner="Mapping IRD phenotypes, modules, and gene priors...\nplease wait...")
+def _load_engine(gamma: float = 0.3):
+    return ClinicalSupportEngine(
+        eager=True,
+        gamma=gamma,
+    )
+
+
+@st.cache_resource
+def _load_discovery_manager(_engine):
+    """Build a DiscoveryManager from the engine's EBL matrices (cached by engine identity)."""
+    from discovery_manager import EBLSource, DiscoveryManager
+    lr = _engine.ebl_lr_matrix
+    cnt = _engine.ebl_count_matrix
+    if lr is None or cnt is None:
+        return None
+    return DiscoveryManager([EBLSource(lr, cnt)])
+
+
+
+# Sidebar: Engine Parameters (gamma + Ethnicity Bayes Layer)
+_ETH_OPTIONS = [
+    "",
+    "Arab_Muslim",
+    "Ashkenazi",
+    "Jewish_Other",
+    "Middle_Eastern_Jewish",
+    "North_African_Jewish",
+]
+
 with st.sidebar:
+    st.markdown(
+        """
+        <div class="sidebar-logo-wrap">
+          <svg width="100%" viewBox="0 0 220 68" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <g transform="translate(5,8) scale(0.42)">
+              <circle cx="60" cy="60" r="52" fill="none" stroke="#00c8b4" stroke-width="1.2" stroke-opacity="0.4" stroke-dasharray="4 8"/>
+              <circle cx="60" cy="60" r="38" fill="none" stroke="#00c8b4" stroke-width="1.5" stroke-opacity="0.5" stroke-dasharray="22 6"/>
+              <circle cx="60" cy="60" r="24" fill="none" stroke="#f59e3a" stroke-width="1.8" stroke-opacity="0.65" stroke-dasharray="12 5"/>
+              <circle cx="60" cy="22" r="3.5" fill="#00c8b4"/>
+              <circle cx="93" cy="79" r="3" fill="#f59e3a"/>
+              <circle cx="27" cy="79" r="3" fill="#f59e3a" opacity="0.7"/>
+              <circle cx="60" cy="60" r="6" fill="#00c8b4"/>
+              <circle cx="60" cy="60" r="2.5" fill="#fff" opacity="0.9"/>
+            </g>
+            <text x="72" y="30" font-family="Outfit, sans-serif" font-size="23" font-weight="700" letter-spacing="3.1" fill="#e8f0f8">IRD</text>
+            <text x="72" y="50" font-family="DM Mono, monospace" font-size="8.1" font-weight="300" letter-spacing="1.45" fill="#00c8b4">PRIORITIZATION ENGINE</text>
+          </svg>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.divider()
+
+    nav_options = [
+        "Phenotype Query",
+        "Interactive Session",
+        "Module Browser",
+        "Comparative Analytics",
+    ]
+    if st.session_state.app_mode not in nav_options:
+        st.session_state.app_mode = nav_options[0]
+
+    for option in nav_options:
+        if st.button(
+            option,
+            key=f"nav_{option}",
+            type="primary" if st.session_state.app_mode == option else "secondary",
+            use_container_width=True,
+        ):
+            st.session_state.app_mode = option
+            st.rerun()
+
+    st.divider()
+
+    # Section: Streamlit UI components for Engine Parameters
     st.subheader("Engine Parameters")
+
+    # Displaying markdown with custom HTML formatting
+    # Added a subtle horizontal rule (<hr>) after the initial description
+    st.markdown(
+        """
+        <div class="sidebar-sub" style="margin:-.25rem 0 .85rem 0;">
+        Controls optional scoring behavior used by the phenotype engine.
+        </div>
+
+        <!-- Subtle separator line -->
+        <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.2); margin: 0.5rem 0;">
+
+        <div style="margin:.25rem 0 .12rem 0;font-size:12px;font-weight:700;color:#d4eaf8;">
+        Ethnicity Bayes Layer
+        </div>
+        <div class="sidebar-sub" style="margin-bottom:.45rem;">
+        Optional population-aware prior. When enabled, selected ethnicity can adjust gene scores using solved-case likelihood ratios.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    eth_group = st.selectbox(
+        "Patient ethnicity",
+        options=_ETH_OPTIONS,
+        format_func=lambda v: "-- Ethnicity Layer OFF --" if v == "" else v.replace("_", " "),
+        key="eth_group_sel",
+        label_visibility="collapsed",
+        help=(
+            "Select the patient's ethnic group to enable population-specific "
+            "founder-variant enrichment. Applies to both the primary gene ranking "
+            "(Track 1) and the Discovery Panel (Track 2)."
+        ),
+    )
+    use_eth_prior = st.checkbox(
+        "Enable Ethnicity Prior",
+        value=False,
+        disabled=(eth_group == ""),
+        key="use_eth_prior_cb",
+        help=(
+            "Multiply each gene's SMA-GS score by its ethnicity likelihood ratio. "
+            "Requires an ethnicity selection above. Default off -- must be explicitly enabled."
+        ),
+    )
+    if eth_group == "":
+        use_eth_prior = False
+    # Keep a canonical key for render paths that still read session ethnicity.
+    st.session_state["ethnicity"] = eth_group
+
+    # Render module leakage header with an added separator above it
+    st.markdown(
+        """
+        <!-- Subtle separator line with reduced top margin -->
+        <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.2); margin: 0rem 0 0.5rem 0;">
+
+        <div style="margin:0.25rem 0 .12rem 0;font-size:12px;font-weight:700;color:#d4eaf8;">
+        Module leakage (&gamma;)
+        </div>
+        <div class="sidebar-sub" style="margin-bottom:.45rem;">
+        Phenotype evidence sharing. Higher values let disease-module patterns contribute more to genes without direct HPO matches.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     gamma_val = st.slider(
         "Module leakage (γ)",
         min_value=0.0,
         max_value=1.0,
         value=0.3,
         step=0.05,
-        help="Controls 'leakage' credit from module symptoms to genes without direct annotations. "
-             "γ=0 is strict matching; γ=1 is full module-wide credit for core genes."
+        label_visibility="collapsed",
+        help=(
+            "Controls leakage credit from module symptoms to genes without direct annotations. "
+            "γ=0 is strict matching; γ=1 is full module-wide credit for core genes."
+        ),
     )
 
+    st.divider()
+
+
 engine = _load_engine(gamma=gamma_val)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Autocomplete option lists — built once from engine data
@@ -857,16 +1279,16 @@ def _demo_callback(case_name: str):
     st.session_state.run_demo = True
 
     # 4. Feedback
-    st.toast(f"✅ Loaded: {case_name}", icon="🔬")
+    _queue_case_notice(
+        "Example Loaded",
+        case_name,
+        "Phenotype terms inserted. The engine will run this profile automatically.",
+    )
 
 def _render_clinical_cases():
     """Render the clinical case demo buttons grid."""
-    st.subheader("Clinical Case Library")
-    st.markdown(
-        '<p class="explain">Select a validated clinical scenario to see how the engine handles '
-        "various IRD modules and demonstrates Information Gain logic.</p>",
-        unsafe_allow_html=True
-    )
+    _render_label("Validated Examples")
+    _render_explain("Predefined teaching examples. Choosing one fills the phenotype fields and runs the query.")
 
     # Use a grid layout for better aesthetics
     cols = st.columns(len(CLINICAL_CASES))
@@ -885,11 +1307,20 @@ def _real_case_callback(case_name: str):
     """Callback for real clinical case buttons loaded from CSV."""
     case_data = next((case for case in _load_real_clinical_cases() if case["name"] == case_name), None)
     if case_data is None:
-        st.toast("Could not load the selected real clinical case.", icon="⚠️")
+        _queue_case_notice(
+            "Case Unavailable",
+            "Could not load the selected real clinical case",
+            "The source row was not found in the clinical case table.",
+            level="error",
+        )
         return
 
     _populate_query_from_case(case_data["hpos"])
-    st.toast(f"Loaded real case: {case_name}", icon="🧬")
+    _queue_case_notice(
+        "Real Case Loaded",
+        case_name,
+        f"{len(case_data['valid_labels'])} phenotype terms inserted. The query will run automatically.",
+    )
 
 def _render_case_button_grid(cases: list[dict], key_prefix: str, callback, columns_per_row: int = 3):
     """Render a compact multi-row button grid."""
@@ -912,11 +1343,10 @@ def _render_real_clinical_cases():
     if not real_cases:
         return
 
-    st.subheader("Test Cases From Real Clinical Cases")
-    st.markdown(
-        '<p class="explain">Real patient-derived cases from <code>real_clinical_cases_signal_only_13.04.26</code>. '
-        "Only cases with at least two valid HPO IDs are shown. Selecting a case inserts those HPO IDs and runs the engine.</p>",
-        unsafe_allow_html=True
+    _render_section_header(
+        "Real Clinical Cases",
+        "Patient-derived phenotype profiles",
+        "Browse eligible de-identified cases from the local clinical case table. Selecting a case inserts its HPO terms and runs the same query workflow.",
     )
 
     with st.expander(f"Browse {len(real_cases)} eligible real cases", expanded=False):
@@ -970,8 +1400,24 @@ def _render_topbar() -> None:
     st.markdown(
         """
         <div class="topbar">
-          <div class="mono" style="font-size:12px;color:var(--ink3);">
-            HPO 2026-04-13 · 442 IRD genes · 17 disease modules
+          <div style="display:flex;align-items:center;gap:0.6rem;">
+            <svg width="22" height="22" viewBox="0 0 120 120" fill="none"
+                 xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;opacity:0.72;">
+              <circle cx="60" cy="60" r="52" fill="none" stroke="#009b8c"
+                stroke-width="1" stroke-opacity="0.35" stroke-dasharray="4 8"/>
+              <circle cx="60" cy="60" r="38" fill="none" stroke="#009b8c"
+                stroke-width="1.5" stroke-opacity="0.5" stroke-dasharray="22 6"/>
+              <circle cx="60" cy="60" r="24" fill="none" stroke="#d4820a"
+                stroke-width="1.8" stroke-opacity="0.65" stroke-dasharray="12 5"/>
+              <circle cx="60" cy="22" r="3.5" fill="#009b8c"/>
+              <circle cx="93" cy="79" r="3"   fill="#d4820a"/>
+              <circle cx="27" cy="79" r="3"   fill="#d4820a" opacity="0.7"/>
+              <circle cx="60" cy="60" r="6"   fill="#009b8c"/>
+              <circle cx="60" cy="60" r="2.5" fill="#fff" opacity="0.9"/>
+            </svg>
+            <div class="mono" style="font-size:12px;color:var(--ink3);">
+              HPO 2026-04-13 &middot; 442 IRD genes &middot; 17 disease modules &middot; 5 ethnicity layer
+            </div>
           </div>
           <div class="status">
             <span class="dot"></span>
@@ -987,8 +1433,64 @@ def _render_page_header(title: str, subtitle: str) -> None:
     st.markdown(
         f"""
         <div class="page-head">
-          <h1>{_esc(title)}</h1>
-          <p>{_esc(subtitle)}</p>
+          <div class="page-head-inner">
+            <div class="page-head-mark" aria-hidden="true">
+              <svg viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="60" cy="60" r="52" fill="none" stroke="#009b8c" stroke-width="1.1" stroke-opacity="0.35" stroke-dasharray="4 8"/>
+                <circle cx="60" cy="60" r="38" fill="none" stroke="#009b8c" stroke-width="1.5" stroke-opacity="0.55" stroke-dasharray="22 6"/>
+                <circle cx="60" cy="60" r="24" fill="none" stroke="#d4820a" stroke-width="1.8" stroke-opacity="0.7" stroke-dasharray="12 5"/>
+                <circle cx="60" cy="22" r="3.5" fill="#009b8c"/>
+                <circle cx="93" cy="79" r="3" fill="#d4820a"/>
+                <circle cx="27" cy="79" r="3" fill="#d4820a" opacity="0.7"/>
+                <circle cx="60" cy="60" r="6" fill="#009b8c"/>
+                <circle cx="60" cy="60" r="2.5" fill="#fff" opacity="0.9"/>
+              </svg>
+            </div>
+            <div>
+              <h1>{_esc(title)}</h1>
+              <p>{_esc(subtitle)}</p>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _queue_case_notice(kicker: str, title: str, meta: str, level: str = "success") -> None:
+    st.session_state["case_load_notice"] = {
+        "kicker": kicker,
+        "title": title,
+        "meta": meta,
+        "level": level,
+    }
+
+
+def _render_case_load_notice() -> None:
+    notice = st.session_state.pop("case_load_notice", None)
+    if not notice:
+        return
+    level_class = " error" if notice.get("level") == "error" else ""
+    st.markdown(
+        f"""
+        <div class="case-load-notice{level_class}">
+          <div class="case-load-mark" aria-hidden="true">
+            <svg viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="60" cy="60" r="52" fill="none" stroke="#00c8b4" stroke-width="1.2" stroke-opacity="0.35" stroke-dasharray="4 8"/>
+              <circle cx="60" cy="60" r="38" fill="none" stroke="#00c8b4" stroke-width="1.5" stroke-opacity="0.55" stroke-dasharray="22 6"/>
+              <circle cx="60" cy="60" r="24" fill="none" stroke="#f59e3a" stroke-width="1.8" stroke-opacity="0.7" stroke-dasharray="12 5"/>
+              <circle cx="60" cy="22" r="3.5" fill="#00c8b4"/>
+              <circle cx="93" cy="79" r="3" fill="#f59e3a"/>
+              <circle cx="27" cy="79" r="3" fill="#f59e3a" opacity="0.7"/>
+              <circle cx="60" cy="60" r="6" fill="#00c8b4"/>
+              <circle cx="60" cy="60" r="2.5" fill="#fff" opacity="0.95"/>
+            </svg>
+          </div>
+          <div class="case-load-body">
+            <div class="case-load-kicker">{_esc(notice.get("kicker", ""))}</div>
+            <div class="case-load-title">{_esc(notice.get("title", ""))}</div>
+            <div class="case-load-meta">{_esc(notice.get("meta", ""))}</div>
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -997,6 +1499,18 @@ def _render_page_header(title: str, subtitle: str) -> None:
 
 def _render_label(text: str) -> None:
     st.markdown(f'<div class="label">{_esc(text)}</div>', unsafe_allow_html=True)
+
+
+def _render_section_header(title: str, subtitle: str, body: str = "") -> None:
+    body_html = f'<p class="section-copy">{_esc(body)}</p>' if body else ""
+    st.markdown(
+        f"""
+        <div class="section-title">{_esc(title)}</div>
+        <div class="section-subtitle">{_esc(subtitle)}</div>
+        {body_html}
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _render_explain(text: str) -> None:
@@ -1229,6 +1743,106 @@ def _render_gene_breakdown(gene) -> None:
         if engine.is_module_signature(_find_hpo_id_by_term(best_match), st.session_state.get("current_top_module_id", -1)):
             sig_html = '<div style="margin-top:.55rem;display:inline-flex;gap:.35rem;align-items:center;font-size:12px;font-weight:600;padding:.2rem .55rem;border-radius:999px;background:#fff7e0;color:#a16207;">Signature-linked best match</div>'
 
+    # --- Ethnicity Bayes Layer card ---
+    ebl_html = ""
+    eth_lr_eff = getattr(gene, "ethnicity_lr_effective", getattr(gene, "ethnicity_lr", None))
+    if eth_lr_eff is not None:
+        # Determine styling based on the *effective* LR
+        lr_color = "var(--teal)" if eth_lr_eff > 1.2 else "var(--red)" if eth_lr_eff < 0.85 else "var(--ink3)"
+
+        rp1l1_warning = ""
+        # Prefer the active sidebar selection key, with legacy fallback.
+        active_ethnicity = st.session_state.get("eth_group_sel", "") or st.session_state.get("ethnicity", "")
+        if gene.gene == "RP1L1" and active_ethnicity == "Ashkenazi":
+            rp1l1_warning = (
+                '<div style="margin-top:.45rem;padding:.3rem .6rem;border-radius:6px;'
+                'background:#fef3c7;color:#b45309;font-size:11px;line-height:1.5;">'
+                '<b>Note:</b> LR may be underestimated. Compound-het founder variants '
+                '(c.6041A&gt;G + c.6512A&gt;G) are currently stored below the LP threshold '
+                'in the source DB and are absent from the training set.'
+                '</div>'
+            )
+        eth_display = active_ethnicity.replace("_", " ") if active_ethnicity else "Unknown"
+        base_score = gene.score / eth_lr_eff if eth_lr_eff != 1.0 else gene.score
+
+        x_val = getattr(gene, "ethnicity_count_n", None) or 0
+        y_val = engine.ebl_ethnicity_totals.get(active_ethnicity, 0)
+
+        count_html = ""
+        enrichment_html = ""
+
+        if y_val > 0 and active_ethnicity:
+            count_html = f'<div style="margin-top:.4rem;font-size:11px;color:var(--ink3);">Appears in <b>{int(x_val)}</b> out of <b>{y_val}</b> cases for this ethnicity.</div>'
+
+            # Calculate enrichment vs. other ethnic groups
+            cnt_matrix = engine.ebl_count_matrix
+            if cnt_matrix is not None and gene.gene in cnt_matrix.index:
+                other_eths = [e for e in cnt_matrix.columns if e != active_ethnicity]
+                x_other = sum(float(cnt_matrix.at[gene.gene, e]) for e in other_eths if e in cnt_matrix.columns)
+                y_other = sum(engine.ebl_ethnicity_totals.get(e, 0) for e in other_eths)
+
+                if y_other > 0:
+                    p_target = (x_val / y_val) * 100
+                    p_other = (x_other / y_other) * 100
+                    rr = (x_val / y_val) / (x_other / y_other) if p_other > 0 else float('inf')
+
+                    if rr == float('inf'):
+                        enrichment_text = f"Appears in <b>{p_target:.1f}%</b> of {active_ethnicity.replace('_', ' ')} patients, but <b>not found</b> in other ethnic groups studied."
+                    elif rr > 1.2:
+                        enrichment_text = f"<b>{p_target:.1f}%</b> of {active_ethnicity.replace('_', ' ')} cases vs. <b>{p_other:.2f}%</b> in other groups. <b>Enrichment: {rr:.1f}× higher</b>."
+                    else:
+                        enrichment_text = f"<b>{p_target:.1f}%</b> of {active_ethnicity.replace('_', ' ')} cases vs. <b>{p_other:.2f}%</b> in other groups.<br>Similar frequency across ethnicities."
+
+                    enrichment_html = f'<div style="margin-top:.3rem;padding:.35rem .5rem;border-radius:6px;background:#f0fdf4;border-left:3px solid #22c55e;font-size:11px;color:var(--ink2);line-height:1.4;">{enrichment_text}</div>'
+
+        reason_code = getattr(gene, "ethnicity_rule_reason", None) or "unknown"
+        raw_lr = getattr(gene, "ethnicity_lr_raw", None) or eth_lr_eff or 1.0
+
+        if reason_code == "downweight_prevented_by_policy":
+            policy_explainer = "Downweighting is disabled by policy, so this did not reduce the score."
+        elif reason_code == "lr_below_boost_threshold":
+            policy_explainer = "Evidence signal is below the partial/boost threshold, so this was not applied."
+        elif reason_code.startswith("insufficient_evidence_n_lt_"):
+            min_n = reason_code.rsplit("_", 1)[-1]
+            policy_explainer = f"Too few training cases for a reliable boost (requires at least {min_n} cases)."
+        elif reason_code.startswith("insufficient_evidence_partial_n_lt_"):
+            min_n = reason_code.rsplit("_", 1)[-1]
+            policy_explainer = f"Signal is moderate, but there are too few training cases for a partial boost (requires at least {min_n} cases)."
+        elif reason_code == "partial_boost_applied":
+            policy_explainer = "Moderate signal: a partial boost was applied to the final score."
+        elif reason_code == "boost_applied":
+            policy_explainer = "Boost applied to the final score."
+        else:
+            policy_explainer = "Policy decision applied."
+
+        reason_html = ""
+        if eth_lr_eff != raw_lr:
+            reason_html = (
+                f'<div style="margin-top:.2rem;font-size:10px;color:var(--ink3);">'
+                f'Raw ethnicity evidence: <b>LR {raw_lr:.2f}</b>.<br>{policy_explainer}'
+                f'</div>'
+            )
+
+        ebl_html = f"""
+        <div style="margin-top:.65rem;padding:.75rem;border-radius:12px;border:1px solid var(--border);background:white;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:.5rem;">
+            <div>
+              <div class="label">Ethnicity Bayes Layer</div>
+              <div style="font-size:11px;color:var(--ink3);margin-top:.15rem;">{_esc(eth_display)}</div>
+            </div>
+            <div class="mono" style="font-size:1.1rem;font-weight:800;color:{lr_color};">×{eth_lr_eff:.3f}</div>
+          </div>
+          {count_html}
+          {enrichment_html}
+          {reason_html}
+          {f'<div style="display:flex;justify-content:space-between;margin-top:.4rem;font-size:11px;color:var(--ink3);"><span>SMA-GS base</span><span class="mono">{base_score:.4f}</span></div>' if eth_lr_eff != 1.0 else ""}
+          {rp1l1_warning}
+        </div>
+        """
+
+    # Score label reflects whether EBL was applied
+    score_label = "SMA-GS × ethnicity LR" if eth_lr_eff is not None and eth_lr_eff != 1.0 else "phenotype overlap + module credit"
+
     st.html(
         f"""
         <div class="card-shell" style="padding:1rem;background:#f4f8fc;">
@@ -1241,8 +1855,9 @@ def _render_gene_breakdown(gene) -> None:
             <div>
               <div class="label">Cluster Stability Modifier</div>
               {stab_html}
+              {ebl_html}
               <div style="margin-top:.7rem;padding:.75rem;border-radius:12px;border:1px solid var(--border);background:white;">
-                <div style="font-size:12px;color:var(--ink3);">phenotype overlap + module credit</div>
+                <div style="font-size:12px;color:var(--ink3);">{score_label}</div>
                 <div style="display:flex;align-items:baseline;gap:.45rem;margin-top:.25rem;">
                   <span style="font-family:Outfit,sans-serif;font-size:1.35rem;font-weight:800;color:var(--ink);">{gene.score:.4f}</span>
                   <span style="font-size:12px;color:var(--ink3);">final score</span>
@@ -1263,8 +1878,131 @@ def _find_hpo_id_by_term(term_name: str) -> str:
     return term_name
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Track 2 — Discovery Panel
+# ─────────────────────────────────────────────────────────────────────────────
+
+@st.dialog("Discovery Panel — Exploratory Candidates", width="large")
+def _show_discovery_dialog(suggestions: list, ethnicity_group: str) -> None:
+    """Modal dialog for Track 2 discovery candidates."""
+    from discovery_manager import PLANNED_SOURCES
+
+    eth_display = ethnicity_group.replace("_", " ")
+    st.markdown(
+        f"""
+        <div style="padding:.75rem 1rem;border-radius:10px;background:#fef3c7;border:1px solid #fcd34d;
+             color:#92400e;font-size:13px;line-height:1.6;margin-bottom:1rem;">
+          <b>Exploratory / Advisory only.</b><br>
+          These genes are <em>not</em> part of the primary
+          IRD module set. They are surfaced because they show statistically significant ethnic
+          enrichment in the <b>{_esc(eth_display)}</b> clinical cohort.<br>
+          Results should be interpreted alongside clinical phenotype and variant evidence.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── Live source: EBL candidates ──────────────────────────────────────────
+    ebl_suggestions = [s for s in suggestions if "EBL" in s.sources]
+    if ebl_suggestions:
+        st.markdown(
+            '<div class="label" style="font-size:12px;margin-bottom:.5rem;">Ethnicity Bayes Layer</div>',
+            unsafe_allow_html=True,
+        )
+        for sug in ebl_suggestions:
+            meta = sug.source_metadata.get("EBL", {})
+            lr_val = meta.get("lr", 0.0)
+            n_val = meta.get("n", 0)
+            lr_color = "var(--teal)" if lr_val > 2.5 else "var(--blue)"
+            master_badge = (
+                '<span style="margin-left:.5rem;font-size:10px;font-weight:700;padding:.15rem .45rem;'
+                'border-radius:999px;background:#fef9c3;color:#854d0e;">Master Candidate</span>'
+                if sug.is_master_candidate else ""
+            )
+            st.markdown(
+                f"""
+                <div class="card-shell" style="padding:.85rem 1rem;margin-bottom:.5rem;display:flex;
+                     justify-content:space-between;align-items:center;gap:1rem;">
+                  <div>
+                    <div class="mono" style="font-size:15px;font-weight:800;color:var(--ink);">
+                      {_esc(sug.gene)}{master_badge}
+                    </div>
+                    <div style="font-size:12px;color:var(--ink3);margin-top:.2rem;">
+                      Source: Ethnicity Bayes Layer &nbsp;·&nbsp;
+                      Training cases: <b>{n_val}</b> &nbsp;·&nbsp;
+                      Population: {_esc(eth_display)}
+                    </div>
+                  </div>
+                  <div style="text-align:right;">
+                    <div class="label" style="font-size:10px;">Ethnicity LR</div>
+                    <div class="mono" style="font-size:1.25rem;font-weight:800;color:{lr_color};">
+                      ×{lr_val:.2f}
+                    </div>
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+    else:
+        st.info(f"No EBL candidates meeting the Expert Gate (LR ≥ 2.0, n ≥ 5) for {eth_display}.")
+
+    # ── Planned sources (roadmap stubs) ──────────────────────────────────────
+    st.markdown(
+        '<div style="height:.75rem;"></div>'
+        '<div class="label" style="font-size:12px;margin-bottom:.5rem;">Planned Sources (Future Integration)</div>',
+        unsafe_allow_html=True,
+    )
+    for src in PLANNED_SOURCES:
+        st.markdown(
+            f"""
+            <div class="card-shell" style="padding:.85rem 1rem;margin-bottom:.5rem;
+                 opacity:.55;border-style:dashed;">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <div>
+                  <div class="mono" style="font-size:13px;font-weight:700;color:var(--ink2);">
+                    {_esc(src['name'])} — {_esc(src['label'])}
+                  </div>
+                  <div style="font-size:12px;color:var(--ink3);margin-top:.25rem;line-height:1.5;">
+                    {_esc(src['description'])}
+                  </div>
+                </div>
+                <span style="font-size:10px;font-weight:700;padding:.2rem .55rem;border-radius:999px;
+                      background:#f1f5f9;color:#64748b;white-space:nowrap;">Planned</span>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def _render_discovery_badge(suggestions: list, ethnicity_group: str) -> None:
+    """Render a compact badge that opens the discovery dialog when clicked."""
+    n = len(suggestions)
+    eth_display = ethnicity_group.replace("_", " ")
+    badge_cols = st.columns([3, 1])
+    with badge_cols[0]:
+        st.markdown(
+            f"""
+            <div style="padding:.65rem 1rem;border-radius:10px;border:1px solid #fcd34d;
+                 background:#fffbeb;color:#92400e;font-size:13px;font-weight:600;
+                 display:flex;align-items:center;gap:.55rem;">
+              <span style="font-size:16px;">&#128300;</span>
+              <span>{n} discovery candidate{'s' if n != 1 else ''} found
+              for <b>{_esc(eth_display)}</b> — not in primary gene set</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with badge_cols[1]:
+        if st.button("View Discovery Panel", use_container_width=True, key="open_discovery_dialog"):
+            _show_discovery_dialog(suggestions, ethnicity_group)
+
+
 def _replay_session_confidences(history: list[tuple[str, str, str]]) -> list[float]:
-    replay = engine.new_session()
+    replay = engine.new_session(
+        ethnicity_group=eth_group,
+        use_ethnicity_prior=use_eth_prior,
+    )
     confidences: list[float] = []
     for hpo_id, _, answer in history:
         if answer == "yes":
@@ -1374,10 +2112,48 @@ def _render_gene_table(genes: list, observed_hpo_ids: list[str], table_key: str 
         key=sort_key,
     )
 
+    active_ethnicity = st.session_state.get("eth_group_sel", "") or st.session_state.get("ethnicity", "")
+    cnt_matrix = engine.ebl_count_matrix
+    totals = engine.ebl_ethnicity_totals or {}
+
+    def _compute_enrichment_ratio(gene_symbol: str) -> float | None:
+        if not active_ethnicity or cnt_matrix is None or active_ethnicity not in cnt_matrix.columns:
+            return None
+        if active_ethnicity not in totals:
+            return None
+        y_val = totals.get(active_ethnicity, 0)
+        if y_val <= 0:
+            return None
+        x_val = float(cnt_matrix.at[gene_symbol, active_ethnicity]) if gene_symbol in cnt_matrix.index else 0.0
+        other_eths = [e for e in cnt_matrix.columns if e != active_ethnicity]
+        y_other = sum(totals.get(e, 0) for e in other_eths)
+        if y_other <= 0:
+            return None
+        x_other = sum(float(cnt_matrix.at[gene_symbol, e]) for e in other_eths if gene_symbol in cnt_matrix.index)
+        p_target = x_val / y_val
+        p_other = x_other / y_other
+        if p_other <= 0:
+            return float("inf") if p_target > 0 else None
+        return p_target / p_other
+
+    def _enrichment_marker(rr: float | None) -> tuple[str, str]:
+        # Subtle 3-level palette for elevated enrichment only.
+        if rr is None or rr < 2.0:
+            return "", ""
+        if rr == float("inf"):
+            return "#b8473a", "High ethnic enrichment (present in selected ethnicity, absent in other groups)"
+        if rr >= 7.0:
+            return "#b8473a", f"High ethnic enrichment ({rr:.1f}× vs other groups)"
+        if rr >= 4.0:
+            return "#d1843f", f"Moderate ethnic enrichment ({rr:.1f}× vs other groups)"
+        return "#d8b457", f"Mild ethnic enrichment ({rr:.1f}× vs other groups)"
+
     rows = []
     for gene in genes[:30]:
         stability = _stability_style(gene.stability)
         pct_match = round(len(gene.supporting_phenotypes) / max(len(observed_hpo_ids), 1) * 100) if observed_hpo_ids else 0
+        rr = _compute_enrichment_ratio(gene.gene)
+        marker_color, marker_tip = _enrichment_marker(rr)
         rows.append(
             {
                 "obj": gene,
@@ -1387,6 +2163,9 @@ def _render_gene_table(genes: list, observed_hpo_ids: list[str], table_key: str 
                 "matching_hpo_terms": len(gene.supporting_phenotypes),
                 "pct": pct_match,
                 "best_match": gene.supporting_phenotypes[0] if gene.supporting_phenotypes else "-",
+                "enrichment_rr": rr,
+                "enrichment_marker_color": marker_color,
+                "enrichment_marker_tip": marker_tip,
             }
         )
 
@@ -1437,13 +2216,21 @@ def _render_gene_table(genes: list, observed_hpo_ids: list[str], table_key: str 
                 unsafe_allow_html=True,
             )
         with row_cols[2]:
+            marker_html = ""
+            if row["enrichment_marker_color"]:
+                marker_html = (
+                    f'<span title="{_esc(row["enrichment_marker_tip"])}" '
+                    f'style="display:inline-block;width:9px;height:9px;border-radius:999px;'
+                    f'background:{row["enrichment_marker_color"]};box-shadow:0 0 0 1px rgba(15,23,42,.15);'
+                    f'margin-left:.35rem;vertical-align:middle;"></span>'
+                )
             st.markdown(
                 f"""
                 <div style="display:flex;align-items:center;gap:.55rem;padding-top:.55rem;">
                   <div style="width:70px;height:6px;border-radius:999px;background:#e8eef6;overflow:hidden;">
                     <div style="width:{max(min(gene.score, 1.0), 0.0) * 100:.1f}%;height:100%;background:linear-gradient(90deg,var(--blue),var(--teal));"></div>
                   </div>
-                  <span class="mono" style="font-size:12px;color:var(--ink2);">{gene.score:.4f}</span>
+                  <span class="mono" style="font-size:12px;color:var(--ink2);">{gene.score:.4f}</span>{marker_html}
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1494,7 +2281,7 @@ def _render_phenotype_chips(observed: list[str], excluded: list[str]) -> None:
 def _build_pdf(result) -> bytes:
     """Build a clinical summary PDF and return as bytes. Requires reportlab."""
     try:
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Flowable
         from reportlab.lib.pagesizes import letter
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib import colors as rl_colors
@@ -1503,21 +2290,83 @@ def _build_pdf(result) -> bytes:
     except ImportError:
         return b""
 
+    class _LogoHeader(Flowable):
+        """PDF header flowable — Stacked·Light-inspired logo mark + wordmark."""
+        def __init__(self, width, gen_time, height=60):
+            Flowable.__init__(self)
+            self.width = width
+            self.height = height
+            self.gen_time = gen_time
+
+        def draw(self):
+            c = self.canv
+            w, h = self.width, self.height
+            teal  = rl_colors.HexColor("#009b8c")
+            amber = rl_colors.HexColor("#d4820a")
+            dark  = rl_colors.HexColor("#0e1620")
+
+            # Background
+            c.setFillColor(rl_colors.HexColor("#f0f4f8"))
+            c.setStrokeColor(rl_colors.HexColor("#d6e4f0"))
+            c.setLineWidth(0.5)
+            c.roundRect(0, 0, w, h, 5, fill=1, stroke=1)
+
+            # Icon — concentric rings centred at (ic_x, ic_y)
+            ic_x, ic_y, sc = 38, h / 2, 0.295   # sc: SVG 120-unit space → ~35pt outer radius
+
+            c.setStrokeColor(teal);  c.setLineWidth(0.5)
+            c.circle(ic_x, ic_y, 52 * sc, fill=0, stroke=1)
+            c.setLineWidth(0.7)
+            c.circle(ic_x, ic_y, 38 * sc, fill=0, stroke=1)
+            c.setStrokeColor(amber); c.setLineWidth(0.9)
+            c.circle(ic_x, ic_y, 24 * sc, fill=0, stroke=1)
+
+            def _node(sx, sy, col, r=1.3):
+                c.setFillColor(col)
+                c.circle(ic_x + (sx - 60) * sc, ic_y - (sy - 60) * sc, r, fill=1, stroke=0)
+
+            _node(60, 22, teal)           # top
+            _node(93, 41, teal, r=1.0)   # right-upper
+            _node(93, 79, amber)          # right-lower
+            _node(27, 79, amber, r=1.1)  # left-lower
+
+            c.setFillColor(teal)
+            c.circle(ic_x, ic_y, 6 * sc, fill=1, stroke=0)
+            c.setFillColor(rl_colors.white)
+            c.circle(ic_x, ic_y, 2.5 * sc, fill=1, stroke=0)
+
+            # Divider
+            div_x = ic_x + 52 * sc + 10
+            c.setStrokeColor(teal); c.setLineWidth(0.4)
+            c.line(div_x, 10, div_x, h - 10)
+
+            # Wordmark
+            tx = div_x + 10
+            c.setFillColor(dark); c.setFont("Helvetica-Bold", 17)
+            c.drawString(tx, ic_y + 5, "IRD")
+            c.setFillColor(teal); c.setFont("Helvetica", 6.5)
+            c.drawString(tx, ic_y - 9, "PRIORITIZATION ENGINE")
+
+            # Right-side metadata
+            c.setFillColor(rl_colors.HexColor("#8ca3bc"))
+            c.setFont("Helvetica", 7.5)
+            c.drawRightString(w - 8, ic_y + 5, "Clinical Summary Report")
+            c.setFont("Helvetica", 7)
+            c.drawRightString(w - 8, ic_y - 8, f"Generated: {self.gen_time}")
+
+    doc_width = letter[0] - 2 * inch
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=letter, rightMargin=inch, leftMargin=inch,
                             topMargin=inch, bottomMargin=inch)
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("title", parent=styles["Heading1"], fontSize=16,
-                                 fontName="Helvetica-Bold", spaceAfter=6)
     body_style  = ParagraphStyle("body", parent=styles["Normal"], fontSize=10,
                                  fontName="Helvetica", spaceAfter=4, leading=14)
     head_style  = ParagraphStyle("head", parent=styles["Heading2"], fontSize=12,
                                  fontName="Helvetica-Bold", spaceAfter=4, spaceBefore=12)
 
     story = []
-    story.append(Paragraph("MPV Phenotype Engine — Clinical Summary", title_style))
-    story.append(Paragraph(f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}", body_style))
-    story.append(Spacer(1, 0.2 * inch))
+    story.append(_LogoHeader(doc_width, datetime.datetime.now().strftime("%Y-%m-%d  %H:%M")))
+    story.append(Spacer(1, 0.25 * inch))
 
     # Top 3 module table
     story.append(Paragraph("Module Posterior Probabilities (Top 3)", head_style))
@@ -2129,7 +2978,11 @@ def _query_mode() -> None:
     if gene_sel:
         with st.spinner(f"Querying gene {gene_sel}…"):
             try:
-                result = engine.query_gene(gene_sel)
+                result = engine.query_gene(
+                    gene_sel,
+                    ethnicity_group=eth_group,
+                    use_ethnicity_prior=use_eth_prior,
+                )
             except ValueError as err:
                 st.error(str(err))
                 return
@@ -2140,7 +2993,12 @@ def _query_mode() -> None:
             st.warning("Please select at least one phenotype — or choose a gene in the expander.")
             return
         with st.spinner("Scoring disease modules…"):
-            result = engine.query(observed, excluded)
+            result = engine.query(
+                observed,
+                excluded,
+                ethnicity_group=eth_group,
+                use_ethnicity_prior=use_eth_prior,
+            )
 
     if run:
         st.session_state["last_result"] = result
@@ -2180,8 +3038,16 @@ def _session_mode() -> None:
     )
 
     # ── Session state ─────────────────────────────────────────────────────
-    if "sess_obj" not in st.session_state:
-        st.session_state.sess_obj      = engine.new_session()
+    session_ctx = (gamma_val, eth_group, use_eth_prior)
+    if (
+        "sess_obj" not in st.session_state
+        or st.session_state.get("sess_ctx") != session_ctx
+    ):
+        st.session_state.sess_obj      = engine.new_session(
+            ethnicity_group=eth_group,
+            use_ethnicity_prior=use_eth_prior,
+        )
+        st.session_state.sess_ctx      = session_ctx
         st.session_state.sess_history  = []  # list of (hpo_id, name, "yes"/"no"/"skip")
         st.session_state.sess_question = None
         st.session_state.sess_result   = None
@@ -3029,22 +3895,34 @@ def _query_mode() -> None:
 
     _render_page_header(
         "Phenotype Query",
-        "Classify a phenotype profile into an IRD disease module and rank candidate genes without altering the existing inference pipeline.",
+        "This tool compares a patient's clinical features, written as HPO terms, against inherited retinal disease modules.\n\n"
+        "It estimates the most likely disease module and prioritizes candidate genes for review.",
     )
-    st.markdown(
-        """
-        <div class="intro-box">
-          Enter observed and excluded HPO phenotypes, or start from a known gene. The UI is redesigned, but the underlying engine and scoring remain unchanged.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    _render_case_load_notice()
 
-    _render_label("Clinical Case Library")
-    _render_explain("Validated example profiles load instantly into the phenotype selectors below.")
+    st.divider()
+
+    _render_section_header(
+        "Start From a Case",
+        "Use an example instead of typing phenotypes manually",
+        "These presets show how the engine behaves with known phenotype patterns. They are useful for testing the workflow or demonstrating typical IRD presentations.",
+    )
     _render_clinical_cases()
     _render_real_clinical_cases()
 
+    st.divider()
+
+    st.markdown(
+        """
+        <div class="section-title">Phenotype Selection</div>
+        <div class="section-subtitle">Describe the patient's observed and excluded clinical findings</div>
+        <p class="section-copy">
+          <span style="color:var(--teal);font-weight:550;">Observed</span> phenotypes support a diagnosis.<br>
+          <span style="color:var(--red);font-weight:550;">Excluded</span> phenotypes help the engine reduce support for modules where those findings are expected.
+        </p>
+        """,
+        unsafe_allow_html=True,
+    )
     selector_cols = st.columns(2)
     with selector_cols[0]:
         _render_label(f"Observed Phenotypes ({len(st.session_state.get('query_observed', []))})")
@@ -3065,12 +3943,21 @@ def _query_mode() -> None:
             key="query_excluded",
         )
 
-    st.markdown("Hint: " + _hpo_search_hint_md())
+    st.markdown(
+        '<p class="soft-note"><strong>Search tip:</strong> use an HPO name or HP ID. Full ontology: '
+        '<a href="https://hpo.jax.org/" target="_blank">hpo.jax.org</a>.</p>',
+        unsafe_allow_html=True,
+    )
+
+    st.divider()
+
+    _render_section_header(
+        "Gene-First Query",
+        "Start from a gene when a candidate gene is already known",
+        "The engine uses that gene's annotated HPO profile as the observed phenotype set.",
+    )
 
     with st.expander("Gene-first query", expanded=False):
-        _render_explain(
-            "Query by gene instead of phenotype. The engine uses the gene's annotated HPO set as the observed phenotype profile."
-        )
         gene_sel = st.selectbox(
             "Gene symbol",
             options=[""] + GENE_OPTIONS,
@@ -3079,6 +3966,13 @@ def _query_mode() -> None:
             key="query_gene",
         )
 
+    st.divider()
+
+    _render_section_header(
+        "Review and Run",
+        "Confirm the query before scoring",
+        "Selected terms appear below as chips. Run the engine when the profile is ready.",
+    )
     _render_phenotype_chips(observed_fmt, excluded_fmt)
 
     run_cols = st.columns([2, 1, 2])
@@ -3093,14 +3987,18 @@ def _query_mode() -> None:
     excluded = _hpo_ids(excluded_fmt)
 
     if not run and "last_result" not in st.session_state:
-        st.info("Select observed and/or excluded phenotypes, or choose a gene in the expander, then run the engine.")
+        st.info("Select phenotypes or choose a gene, then run the engine.")
         return
 
     if run:
         if gene_sel:
             with st.spinner(f"Querying gene {gene_sel}..."):
                 try:
-                    result = engine.query_gene(gene_sel)
+                    result = engine.query_gene(
+                        gene_sel,
+                        ethnicity_group=eth_group,
+                        use_ethnicity_prior=use_eth_prior,
+                    )
                 except ValueError as err:
                     st.error(str(err))
                     return
@@ -3109,7 +4007,12 @@ def _query_mode() -> None:
                 st.warning("Select at least one observed or excluded phenotype, or choose a gene.")
                 return
             with st.spinner("Scoring disease modules..."):
-                result = engine.query(observed, excluded)
+                result = engine.query(
+                    observed,
+                    excluded,
+                    ethnicity_group=eth_group,
+                    use_ethnicity_prior=use_eth_prior,
+                )
         st.session_state["last_result"] = result
     else:
         result = st.session_state.get("last_result")
@@ -3119,6 +4022,20 @@ def _query_mode() -> None:
         '<div class="card-shell" style="padding:.8rem 1rem;background:var(--teal-l);border-color:#bfece4;color:var(--teal);font-weight:700;">Query complete. Results below.</div>',
         unsafe_allow_html=True,
     )
+
+    # Track 2 — Discovery Panel badge (fires whenever ethnicity is set)
+    if eth_group:
+        disc_mgr = _load_discovery_manager(engine)
+        if disc_mgr is not None:
+            eng_genes = set(engine.get_gene_options())
+            disc_suggestions = disc_mgr.get_suggestions(
+                excluded_genes=eng_genes,
+                context={"ethnicity_group": eth_group},
+            )
+            if disc_suggestions:
+                st.markdown("<div style='height:.35rem;'></div>", unsafe_allow_html=True)
+                _render_discovery_badge(disc_suggestions, eth_group)
+
     if gene_sel:
         _render_result(result, observed_hpo_ids=engine.gene_observed_hpo_ids(gene_sel), workup_add_to_query=True)
     else:
@@ -3139,8 +4056,16 @@ def _session_mode() -> None:
         unsafe_allow_html=True,
     )
 
-    if "sess_obj" not in st.session_state:
-        st.session_state.sess_obj = engine.new_session()
+    session_ctx = (gamma_val, eth_group, use_eth_prior)
+    if (
+        "sess_obj" not in st.session_state
+        or st.session_state.get("sess_ctx") != session_ctx
+    ):
+        st.session_state.sess_obj = engine.new_session(
+            ethnicity_group=eth_group,
+            use_ethnicity_prior=use_eth_prior,
+        )
+        st.session_state.sess_ctx = session_ctx
         st.session_state.sess_history = []
         st.session_state.sess_question = None
         st.session_state.sess_result = None
@@ -3634,48 +4559,12 @@ def _analytics_mode():
 with st.sidebar:
     st.markdown(
         """
-        <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.65rem;">
-          <div style="width:2.3rem;height:2.3rem;border-radius:.9rem;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--teal),#1275c0);color:white;font-family:Outfit,sans-serif;font-weight:800;">M</div>
-          <div>
-            <div class="sidebar-title">MPV Phenotype</div>
-            <div class="sidebar-title">Engine</div>
-          </div>
-        </div>
-        <div class="sidebar-sub">Inherited Retinal Disease<br>Clinical Decision Support</div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.divider()
-
-    nav_options = [
-        "Phenotype Query",
-        "Interactive Session",
-        "Module Browser",
-        "Comparative Analytics",
-    ]
-    if st.session_state.app_mode not in nav_options:
-        st.session_state.app_mode = nav_options[0]
-
-    for option in nav_options:
-        if st.button(
-            option,
-            key=f"nav_{option}",
-            type="primary" if st.session_state.app_mode == option else "secondary",
-            use_container_width=True,
-        ):
-            st.session_state.app_mode = option
-            st.rerun()
-
-    st.divider()
-
-    st.markdown(
-        """
         <div class="sidebar-sub">
         <b style="color:#5e89ab;">System Specifications</b><br>
-        Model: Naive Bayes inference<br>
-        Metric: Information Gain (nats)<br>
-        Scope: 17 modules, 442 IRD genes<br>
-        Data Source: HPO (2026-04-13)
+        Model: Naive Bayes module inference<br>
+        Gene score: SMA-GS with module leakage<br>
+        Scope: 17 disease modules, 442 IRD genes<br>
+        Optional layer: ethnicity likelihood ratios
         </div>
         """,
         unsafe_allow_html=True
@@ -3687,9 +4576,9 @@ with st.sidebar:
         <div class="sidebar-sub">
         <b style="color:#5e89ab;">Data Provenance</b><br>
         HPO Release: 2026-04-13<br>
-        IRD Gene-Disease: HPO Annotations<br>
-        Module Definitions: Network clustering (MPV analysis)<br>
-        Genes in scope: 442 IRD genes
+        Gene phenotypes: HPO gene annotations<br>
+        Module definitions: MPV network clustering<br>
+        Ethnicity layer: solved-case LR/count matrices
         </div>
         """,
         unsafe_allow_html=True,

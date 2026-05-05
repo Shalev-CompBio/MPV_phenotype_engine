@@ -1,4 +1,4 @@
-# MPV Phenotype Engine
+# IRD Prioritization Engine
 
 A probabilistic clinical decision-support system for Inherited Retinal Disease (IRD) diagnosis.
 
@@ -21,6 +21,8 @@ This document is an updated technical README aligned to the current implementati
 - `prediction_engine.py`
 - `clinical_support.py`
 - `session_manager.py`
+- `output_models.py`
+- `discovery_manager.py`
 - `app.py`
 
 It covers:
@@ -184,13 +186,41 @@ Each `GeneCandidate` contains:
 
 | Field | Content |
 |---|---|
-| `score` | Final SMA-GS score, rounded to 6 decimal places |
+| `score` | Final SMA-GS score after all active multipliers, rounded to 6 decimal places |
 | `stability` | Classification string: `"core"`, `"peripheral"`, or `"unstable"` |
 | `supporting_phenotypes` | Names of observed terms the gene is **directly annotated** to (exact matches only; leak terms excluded) |
 | `score_breakdown` | `list[tuple[str, float]]` — (term name, total contribution) for all terms with positive affinity, sorted descending. Includes both direct and leak terms. |
 | `leak_breakdown` | `list[tuple[str, float]]` — (term name, imputed leakage contribution) for leak-only terms. Empty when γ=0 or gene is unstable. |
 | `stability_breakdown` | `tuple[str, float, float]` — (classification, ψ, total_gate_contribution). `ψ` is the coherence gate value; `total_gate_contribution` is the sum of all leak contributions. |
 | `npp_score` | `None` (reserved for future protein network prior integration) |
+| `ethnicity_lr` | `float | None` — EBL multiplier actually applied to this gene (`None` means EBL layer is inactive for the query) |
+
+#### 2.6.5 Ethnicity Bayes Layer (EBL) (Implemented)
+
+An **Ethnicity Bayes Layer (EBL)** is implemented as an optional late-stage multiplier on Track 1 gene ranking.
+
+Per gene:
+
+$$
+\text{final\_score}(g) = \text{SMA-GS}(g) \times \text{effective\_LR}(g,\text{ethnicity})
+$$
+
+Runtime behavior governed by `EthnicityPriorPolicy`:
+- `SMA-GS` is computed first for every candidate gene.
+- If `use_ethnicity_prior=False` or no ethnicity is selected, LR is not applied and `ethnicity_lr=None`.
+- If EBL is active, LR is evaluated against the `EthnicityPriorPolicy` (default mode: `upweight_only`):
+  - **Full Boost**: If raw LR ≥ 2.0 and training cases (n) ≥ 5, multiplier = raw LR.
+  - **Partial Boost**: If 1.4 ≤ raw LR < 2.0 and training cases (n) ≥ 7, multiplier receives 50% of the LR effect.
+  - **Neutral**: Missing gene, missing ethnicity column, NaN, insufficient cases, or LR < 1.4 resolve to a neutral multiplier (`1.0`). Downweighting (LR < 1.0) is prevented by default policy.
+- Genes are re-sorted by the adjusted score after multiplication.
+
+Engine-level integration:
+- `ClinicalSupportEngine` loads both EBL matrices at startup:
+  - `ethnicity_bayes_layer/lr_matrix_all.csv`
+  - `ethnicity_bayes_layer/count_matrix_all.csv`
+- If files are absent, the engine keeps running with EBL disabled (no hard failure).
+- `query()` and `query_gene()` emit audit logs when EBL is active.
+- The count matrix is exposed for Track 2 source gating and UI transparency.
 
 ### 2.7 Prediction + Active Learning Layer
 
@@ -235,7 +265,7 @@ Qualitative IG labels used in the UI:
 
 ### 2.8 Orchestration Layer
 
-`ClinicalSupportEngine` is the public entry point. It instantiates and holds all sub-modules, and assembles the full `QueryResult` in a fixed pipeline order:
+`ClinicalSupportEngine` is the public entry point. It instantiates and holds all sub-modules, loads optional EBL matrices, and assembles the full `QueryResult` in a fixed pipeline order:
 
 1. Score all 17 modules (`ScoringEngine`)
 2. Compute confidence (entropy normalization)
@@ -244,12 +274,19 @@ Qualitative IG labels used in the UI:
 5. Predict workup / risk / next manifestations (`PredictionEngine`)
 6. Suggest top-5 next questions by information gain (`PredictionEngine`)
 
-The γ parameter is passed to `ClinicalSupportEngine` at initialization and forwarded to `GeneRanker`. Changing γ via the UI slider creates a new engine instance (via `@st.cache_resource` keyed on the slider value).
+The γ parameter is passed to `ClinicalSupportEngine` at initialization and forwarded to `GeneRanker`. Changing γ via the UI slider creates a new engine instance (via `@st.cache_resource` keyed on γ).
+
+Ethnicity context (`ethnicity_group`, `use_ethnicity_prior`) is accepted by `query(...)`, `query_gene(...)`, and `new_session(...)`, then applied inside `GeneRanker.rank_genes(...)`. This keeps ethnicity behavior explicit per request/session and avoids hidden shared mutable state.
+
+Public engine properties for EBL-aware UI/data flows:
+- `ethnicity_group`
+- `ebl_lr_matrix`
+- `ebl_count_matrix`
 
 Public methods:
-- `query(observed, excluded)` — full phenotype batch query
-- `query_gene(gene_symbol)` — gene-first query using the gene's annotated HPO terms as observed
-- `new_session()` — returns a stateful `Session` object for interactive Q&A
+- `query(observed, excluded, ethnicity_group=None, use_ethnicity_prior=None)` — full phenotype batch query
+- `query_gene(gene_symbol, ethnicity_group=None, use_ethnicity_prior=None)` — gene-first query using the gene's annotated HPO terms as observed
+- `new_session(ethnicity_group=None, use_ethnicity_prior=None)` — returns a stateful `Session` object for interactive Q&A
 - `browse_module(module_id)` — returns structured display data for the Module Browser view
 
 ### 2.9 UI/Delivery Layer
@@ -260,8 +297,12 @@ Public methods:
 - **Module Browser** — per-module HPO profile, signatures, genes, and system architecture plots
 - **Comparative Analytics** — inter-module enrichment and global IRD vs. universe context
 
+**Sidebar Logo**: Displays the "IRD PRIORITIZATION ENGINE" logo and branding at the top of the sidebar.
+
 **Engine Parameters sidebar panel** (rendered before engine initialization):
 - **Module leakage (γ)** slider — range [0.0, 1.0], default 0.3. Controls the SMA-GS leakage weight. Moving the slider immediately re-instantiates the engine with the new γ value (cached per unique value, so returning to a prior value is free).
+- **Patient ethnicity** selectbox — drives Track 1 EBL context and Track 2 discovery context.
+- **Enable ethnicity prior (Track 1)** checkbox — disabled until ethnicity is selected; when enabled, Track 1 gene scores are multiplied by EBL LR.
 
 Additional UI-specific behaviors:
 - Sticky topbar showing HPO version, gene count, and engine-ready status
@@ -270,10 +311,18 @@ Additional UI-specific behaviors:
 - Add-to-query reactive rerun from workup / risk / next manifestation lists
 - Session history with per-entry **Undo** button and confidence progression tracker
 - Expandable gene rows in the Candidate Genes tab showing phenotype contribution bars, coherence gate (ψ), and module-extrapolated contributions panel for leak terms
+- Expandable gene rows now include an **EBL card** between stability and final score:
+  - LR shown as ×multiplier with color coding (teal/red/neutral)
+  - SMA-GS base score shown when LR ≠ 1.0
+  - RP1L1/Ashkenazi advisory warning shown in amber when triggered
 - Downloadable CSV for candidate genes and optional PDF summary (requires `reportlab`)
 - Module signature highlighting (⭐) in phenotype output names and gene table
 - System architecture PNGs for each module in the Module Browser with a download button
 - Dark-mode style overrides (CSS injected when `dark_mode` session flag is set; currently forced to `False`)
+- Track 2 **Discovery badge** appears under the query-complete banner when ethnicity is set and discovery candidates exist
+- Track 2 **Discovery Panel dialog** (`@st.dialog`) renders:
+  - Live EBL candidate cards (gene, LR, training count, population, optional Master Candidate badge)
+  - Two dashed planned-source cards (NPP and PPI roadmap stubs)
 
 ---
 
@@ -286,6 +335,7 @@ For each run, the engine returns a complete `QueryResult` containing:
 3. Ranked candidate genes (within the top module)
 4. Phenotype prediction bundles: recommended workup, prognostic risk, likely next manifestations
 5. Active-learning question suggestions (top 5 by information gain)
+6. Optional Track 2 discovery suggestions at UI level (outside `QueryResult`) when ethnicity context is present and discovery sources return candidates
 
 ### 3.1 Result Rendering (UI)
 
@@ -304,6 +354,7 @@ The active `_render_result()` function renders results across three tabs:
   - Phenotype contribution bars (all terms with positive affinity, direct + leak)
   - Coherence gate display: stability classification and ψ value
   - Module-aware credit line showing the total leakage contribution
+  - Ethnicity Bayes Layer card (when active): LR multiplier, base SMA-GS score (if LR ≠ 1.0), and RP1L1/Ashkenazi warning when applicable
   - Module-extrapolated contributions sub-panel listing each leak term individually (only visible when γ > 0 and gene is not unstable)
   - When `score_breakdown` is empty: message "No phenotype overlap with query — score is 0 for this gene"
 - CSV and PDF download buttons
@@ -312,6 +363,11 @@ The active `_render_result()` function renders results across three tabs:
 - Three-column layout: Recommended Workup (≥ 50%), Prognostic Risk (15–50%), Likely Next Manifestations (ontology children)
 - Each column has "+ Add" buttons that insert the term into the query and trigger a rerun
 
+**Query status + discovery:**
+- "Query complete" banner appears after run
+- If ethnicity is selected and Track 2 has candidates, a discovery badge appears below the banner with candidate count + ethnicity
+- Clicking the badge opens the Discovery Panel dialog with live EBL cards and planned NPP/PPI cards
+
 ### 3.2 Result Semantics
 
 | Output | Interpretation |
@@ -319,7 +375,9 @@ The active `_render_result()` function renders results across three tabs:
 | Module probability | Bayesian posterior conditioned on observed/excluded evidence under Naive Bayes assumptions |
 | Confidence | Sharpness of the posterior distribution — how concentrated evidence is on one module. Not an absolute correctness probability. |
 | Gene score | Prevalence-weighted affinity between gene and patient phenotype, gated by cluster membership coherence. Ranges [0, 1+] theoretically; in practice bounded by annotation density. |
+| Ethnicity LR multiplier | Optional post-SMA-GS multiplicative prior from EBL; neutral fallback is 1.0 when EBL is active but no valid value exists |
 | IG score | Expected reduction in posterior entropy from asking the next question. Computed in nats. |
+| Discovery candidate (Track 2) | Non-primary gene surfaced by external evidence sources (currently EBL), with Expert Gate filtering and source metadata |
 
 ### 3.3 Output Model
 
@@ -333,13 +391,20 @@ Primary dataclasses from `output_models.py`:
 
 **`GeneCandidate`**
 - `gene: str`
-- `score: float` — SMA-GS final score
+- `score: float` — final score after SMA-GS and any active ethnicity LR multiplication
 - `stability: str` — `"core"` | `"peripheral"` | `"unstable"`
 - `supporting_phenotypes: list[str]` — directly annotated matching terms only (no leak terms)
 - `npp_score: float | None` — reserved; currently `None`
 - `score_breakdown: list[tuple[str, float]]` — (term name, total contribution) for all terms with positive affinity, sorted descending
 - `leak_breakdown: list[tuple[str, float]]` — (term name, leakage contribution) for imputed terms only; empty when γ=0 or gene is unstable
 - `stability_breakdown: tuple[str, float, float] | None` — (classification, ψ, total_gate_contribution)
+- `ethnicity_lr: float | None` — applied EBL multiplier (`None` when ethnicity layer is off)
+
+**`DiscoverySuggestion`**
+- `gene: str`
+- `sources: list[str]` — evidence source names (currently includes `"EBL"` for live results)
+- `source_metadata: dict` — per-source details (e.g., `{"EBL": {"lr": 3.38, "n": 15, "ethnicity": "North_African_Jewish"}}`)
+- `is_master_candidate: bool` — `True` when 2+ live sources support the same gene
 
 **`HPOTerm`**
 - `hpo_id: str`, `term_name: str`, `prevalence: float | None`
@@ -387,7 +452,7 @@ Non-perfect probabilities (e.g., Choroideremia at 0.70) still rank correctly at 
 
 ## 5) Inputs and Data Provenance
 
-All primary files are expected under `Input/`.
+Primary phenotype/model files are expected under `Input/`. Ethnicity-prior matrices are expected under `ethnicity_bayes_layer/`.
 
 | File | Role |
 |---|---|
@@ -395,6 +460,8 @@ All primary files are expected under `Input/`.
 | `gene_classification_20260412_1524.csv` | Gene → module, stability score, classification |
 | `hp.obo` | HPO ontology graph |
 | `module_phenotypic_signatures_FDR_corrected_20260412_1524.csv` | FDR-significant module signatures |
+| `ethnicity_bayes_layer/lr_matrix_all.csv` | Ethnicity LR matrix used by Track 1 scoring and Track 2 discovery |
+| `ethnicity_bayes_layer/count_matrix_all.csv` | Ethnicity training-count matrix used by Track 2 Expert Gate and UI counts |
 
 Reference provenance (current implementation):
 - HPO release: 2026-04-13
@@ -432,6 +499,8 @@ engine = ClinicalSupportEngine(eager=True, gamma=0.3)
 result = engine.query(
     observed=["HP:0000510", "HP:0000407"],
     excluded=["HP:0001513"],
+    ethnicity_group="Ashkenazi",
+    use_ethnicity_prior=True,
 )
 
 print("Top module:", result.top_module.module_id)
@@ -496,9 +565,13 @@ MPV_phenotype_engine/
 │   └── single_system_plots/
 │       ├── system_plot_module_0.png … system_plot_module_16.png
 │       └── system_plot_module_All.png
+├── ethnicity_bayes_layer/
+│   ├── lr_matrix_all.csv
+│   └── count_matrix_all.csv
 ├── app.py
 ├── clinical_support.py
 ├── data_loader.py
+├── discovery_manager.py
 ├── gene_ranker.py
 ├── hpo_traversal.py
 ├── output_models.py
@@ -522,6 +595,7 @@ MPV_phenotype_engine/
 | Module prior customization | Not implemented | Currently uniform prior (1/17 per module) |
 | Ancestor weighting calibration | Not implemented | Decay schedule currently hardcoded |
 | γ calibration via MRR | Manually tuned | Default 0.3 chosen by MRR sweep on 13 real clinical cases; can be re-tuned as cohort grows |
+| Additional Track 2 sources (NPP, PPI) | Planned stubs in UI | `PLANNED_SOURCES` metadata cards exist; source logic not yet active |
 
 ---
 
@@ -549,43 +623,57 @@ The analytics header also renders four hardcoded summary statistics cards:
 
 ### Dual-Definition Pattern
 
-`app.py` contains two full sets of mode functions. Python resolves duplicate function names to the **last definition**, so the v2 functions are always dispatched at runtime. The v1 functions are retained for reference only.
+`app.py` contains two generations of mode/render functions. As in standard Python name resolution, the later definitions are the active runtime versions; earlier versions are legacy references.
 
-| Function | Approximate Lines | Status |
-|---|---|---|
-| `_render_result()` v1 | ~1596–1994 | Legacy — uses `altair` bar chart |
-| `_query_mode()` v1 | ~2001–2123 | Legacy |
-| `_session_mode()` v1 | ~2129–2327 | Legacy |
-| `_analytics_mode()` v1 | ~2329–2621 | Legacy |
-| `_browser_mode()` v1 | ~2627–2831 | Legacy |
-| `_render_result()` v2 | ~2833–2986 | **Active** — uses custom HTML chart |
-| `_query_mode()` v2 | ~2989–3088 | **Active** |
-| `_session_mode()` v2 | ~3091–3272 | **Active** |
-| `_browser_mode()` v2 | ~3274–3440 | **Active** — 4 tabs |
-| `_analytics_mode()` v2 | ~3442–3590 | **Active** — includes coherence landscape |
-
-Line numbers are approximate and shift as the file is edited.
-
-### Engine Initialization and γ Caching
+### Engine + Discovery Manager Caching
 
 ```python
 @st.cache_resource
-def _load_engine(gamma: float = 0.3) -> ClinicalSupportEngine:
+def _load_engine(gamma: float = 0.3):
     return ClinicalSupportEngine(eager=True, gamma=gamma)
+
+@st.cache_resource
+def _load_discovery_manager(_engine):
+    ...
 ```
 
-The γ slider is rendered in the sidebar before `_load_engine` is called. `@st.cache_resource` keys on the argument, so each unique γ value maps to one cached engine instance. Switching from 0.3 → 0.4 → 0.3 reuses the cached 0.3 instance on the return trip.
+- `_load_engine(...)` builds the core clinical engine.
+- `_load_discovery_manager(...)` builds Track 2 discovery wiring from the already-loaded EBL matrices.
+- Sidebar ethnicity controls feed runtime query/session/discovery context and are kept consistent across Track 1 and Track 2 rendering.
 
-### Module Browser Tabs (v2)
+### EBL + Discovery Rendering Contracts
 
-Four tabs:
-1. **HPO Profile** — top terms as inline bar rows (top 25 by module prevalence)
-2. **Signatures** — FDR-significant enrichments as styled cards with odds ratio and q-value
-3. **Gene List** — stability-ranked gene cards with cluster confidence badges
-4. **System Architecture** — per-module PNG network plot + all-module overview
+- **Sidebar**:
+  - Ethnicity selectbox
+  - "Enable ethnicity prior (Track 1)" checkbox (disabled until ethnicity is selected)
+- **Gene breakdown card**:
+  - Stability card
+  - EBL card (LR multiplier color-coded; optional SMA-GS base score when LR ≠ 1; RP1L1/Ashkenazi warning when triggered)
+  - Final score card
+- **Post-query banner area**:
+  - Query-complete banner
+  - Conditional discovery badge (count + ethnicity) when Track 2 suggestions exist
+- **Discovery dialog**:
+  - Live EBL cards with LR + training count + population
+  - Planned dashed NPP and PPI cards from `PLANNED_SOURCES`
 
-### Session Mode (v2)
+---
 
-Two-column layout:
-- **Left column**: Current question card with IG bar + answer buttons (Yes / No / Skip) + live "Current Diagnosis" result below
-- **Right column**: Session history as color-coded answer cards with per-entry Undo button + confidence progression tracker
+## 12) 2026-05 Ethnicity + Discovery Update Log
+
+### Files changed
+
+| File | Exact changes |
+|---|---|
+| `ethnicity_prior_policy.py` | Introduced centralized `EthnicityPriorPolicy` to govern how EBL applies LRs (e.g., partial boosts, min thresholds, preventing downweight). Defines `EthnicityPriorDecision` for transparent tracking. |
+| `output_models.py` | `GeneCandidate` includes an ethnicity LR field (nullable for backward-compatible "layer off"). Added `DiscoverySuggestion` dataclass for Track 2 payloads. |
+| `discovery_manager.py` | New Track 2 aggregation layer. `EBLSource` enforces Expert Gate (driven by `EthnicityPriorPolicy` thresholds, default `LR ≥ 2.0`, `n ≥ 5`) and excludes genes already in the engine's 442-gene primary set. `DiscoveryManager` merges sources and flags Master Candidates (`>=2` active sources). Added `PLANNED_SOURCES` roadmap stubs (NPP/PPI) for UI cards. |
+| `gene_ranker.py` | `GeneRanker` accepts `ethnicity_group`, `use_ethnicity_prior`, and `lr_matrix`. After SMA-GS score computation, applies multiplicative LR and re-sorts by adjusted score. Persists per-gene LR in candidate output for UI/audit display. |
+| `clinical_support.py` | Engine accepts ethnicity parameters, loads EBL LR/count matrices at startup (fallback to disabled layer if files are absent), exposes `ethnicity_group`, `ebl_lr_matrix`, and `ebl_count_matrix` properties, and forwards ethnicity context into ranking/session calls. Audit logs are emitted in `query()` and `query_gene()` when the prior is active. |
+| `app.py` | Visual rebranding to 'IRD PRIORITIZATION ENGINE' including a new SVG logo. Added ethnicity controls in sidebar, EBL card inside per-gene breakdown panel, post-query discovery badge, and `@st.dialog` Track 2 panel with live EBL cards plus planned NPP/PPI cards. |
+| `MPV_Phenotype_Engine_Pipeline_Logic_and_Results.md` | Updated to reflect implemented Ethnicity Bayes Layer behavior, the tiered policy boost system, UI rebranding, and Track 2 Discovery architecture end-to-end. |
+
+### Behavioral summary
+
+- Track 1 remains the primary diagnostic path (`QueryResult` + ranked module genes).
+- Track 2 provides exploratory candidates from external evidence sources and is intentionally separated in UI/semantics from primary diagnostic ranking.

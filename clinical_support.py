@@ -21,7 +21,11 @@ Design decisions
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+
+import pandas as pd
+
 from output_models import QueryResult, ModuleMatch
 from data_loader import DataLoader, MODULE_IDS
 from hpo_traversal import HPOTraversal
@@ -29,9 +33,13 @@ from scoring_engine import ScoringEngine
 from gene_ranker import GeneRanker
 from prediction_engine import PredictionEngine
 from session_manager import Session
+from ethnicity_prior_policy import EthnicityPriorPolicy
+
+logger = logging.getLogger(__name__)
 
 # Default data directory relative to this file
 _DEFAULT_DATA_DIR = Path(__file__).parent / "Input"
+_EBL_DIR = Path(__file__).parent / "ethnicity_bayes_layer"
 
 
 class ClinicalSupportEngine:
@@ -48,9 +56,39 @@ class ClinicalSupportEngine:
         self._gr: GeneRanker | None = None
         self._pe: PredictionEngine | None = None
         self._gamma = gamma
+        self._ebl_lr: pd.DataFrame | None = None
+        self._ebl_cnt: pd.DataFrame | None = None
+        self._ebl_policy: EthnicityPriorPolicy | None = None
 
         if eager:
             self._init()
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def ethnicity_group(self) -> str:
+        return ""
+
+    @property
+    def use_ethnicity_prior(self) -> bool:
+        return False
+
+    @property
+    def ebl_lr_matrix(self) -> pd.DataFrame | None:
+        self._init()
+        return self._ebl_lr
+
+    @property
+    def ebl_count_matrix(self) -> pd.DataFrame | None:
+        self._init()
+        return self._ebl_cnt
+
+    @property
+    def ebl_ethnicity_totals(self) -> dict[str, int]:
+        self._init()
+        return getattr(self, "_ebl_eth_totals", {})
 
     def _init(self) -> None:
         """Initialize all sub-modules (idempotent)."""
@@ -59,7 +97,28 @@ class ClinicalSupportEngine:
         self._dl = DataLoader(str(self._data_dir))
         self._ht = HPOTraversal(self._data_dir / "hp.obo", self._dl.ird_terms)
         self._se = ScoringEngine(self._dl, self._ht)
-        self._gr = GeneRanker(self._dl, self._ht, gamma=self._gamma)
+
+        # Load EBL matrices (fail silently — layer stays off if files absent)
+        try:
+            self._ebl_lr = pd.read_csv(_EBL_DIR / "lr_matrix_all.csv", index_col=0)
+            self._ebl_cnt = pd.read_csv(_EBL_DIR / "count_matrix_all.csv", index_col=0)
+            ts = pd.read_csv(_EBL_DIR / "training_set.csv")
+            self._ebl_eth_totals = ts["eth_group"].value_counts().to_dict()
+        except FileNotFoundError:
+            logger.warning("EBL matrices not found at %s — ethnicity prior disabled.", _EBL_DIR)
+            self._ebl_lr = None
+            self._ebl_cnt = None
+            self._ebl_eth_totals = {}
+
+        self._ebl_policy = EthnicityPriorPolicy.default()
+
+        self._gr = GeneRanker(
+            self._dl, self._ht,
+            gamma=self._gamma,
+            lr_matrix=self._ebl_lr,
+            count_matrix=self._ebl_cnt,
+            ebl_policy=self._ebl_policy,
+        )
         self._pe = PredictionEngine(self._dl, self._ht, self._se)
 
     # ------------------------------------------------------------------
@@ -70,6 +129,8 @@ class ClinicalSupportEngine:
         self,
         observed: list[str] | None = None,
         excluded: list[str] | None = None,
+        ethnicity_group: str | None = None,
+        use_ethnicity_prior: bool | None = None,
     ) -> QueryResult:
         """Full phenotype query.
 
@@ -77,14 +138,33 @@ class ClinicalSupportEngine:
         ----------
         observed : list of HPO IDs present in the patient
         excluded : list of HPO IDs confirmed absent
+        ethnicity_group : per-query ethnicity context (optional)
+        use_ethnicity_prior : whether to apply EBL for this query (optional)
         """
         self._init()
+        effective_ethnicity = ethnicity_group or ""
+        effective_use_prior = bool(use_ethnicity_prior) if use_ethnicity_prior is not None else False
+        if effective_use_prior and effective_ethnicity:
+            logger.info(
+                "Applied ethnicity prior [%s] to phenotype query "
+                "(%d observed, %d excluded terms).",
+                effective_ethnicity,
+                len(observed or []),
+                len(excluded or []),
+            )
         return _build_result(
             self._dl, self._se, self._gr, self._pe,
             observed or [], excluded or [],
+            ethnicity_group=effective_ethnicity,
+            use_ethnicity_prior=effective_use_prior,
         )
 
-    def query_gene(self, gene_symbol: str) -> QueryResult:
+    def query_gene(
+        self,
+        gene_symbol: str,
+        ethnicity_group: str | None = None,
+        use_ethnicity_prior: bool | None = None,
+    ) -> QueryResult:
         """Gene-first query.
 
         Uses the gene's annotated HPO terms as 'observed' to produce a
@@ -95,11 +175,20 @@ class ClinicalSupportEngine:
         info = self._dl.gene_info.get(gene)
         if info is None:
             raise ValueError(f"Gene not found in IRD panel: {gene!r}")
-
+        effective_ethnicity = ethnicity_group or ""
+        effective_use_prior = bool(use_ethnicity_prior) if use_ethnicity_prior is not None else False
+        if effective_use_prior and effective_ethnicity:
+            logger.info(
+                "Applied ethnicity prior [%s] to gene-first query for %s.",
+                effective_ethnicity,
+                gene,
+            )
         gene_hpos = sorted(self._dl.gene_hpo.get(gene, set()))
         return _build_result(
             self._dl, self._se, self._gr, self._pe,
             gene_hpos, [],
+            ethnicity_group=effective_ethnicity,
+            use_ethnicity_prior=effective_use_prior,
         )
 
     def gene_observed_hpo_ids(self, gene_symbol: str) -> list[str]:
@@ -108,10 +197,23 @@ class ClinicalSupportEngine:
         gene = gene_symbol.strip().upper()
         return sorted(self._dl.gene_hpo.get(gene, set()))
 
-    def new_session(self) -> Session:
+    def new_session(
+        self,
+        ethnicity_group: str | None = None,
+        use_ethnicity_prior: bool | None = None,
+    ) -> Session:
         """Create a new interactive Q&A session."""
         self._init()
-        return Session(self._dl, self._se, self._gr, self._pe)
+        effective_ethnicity = ethnicity_group or ""
+        effective_use_prior = bool(use_ethnicity_prior) if use_ethnicity_prior is not None else False
+        return Session(
+            self._dl,
+            self._se,
+            self._gr,
+            self._pe,
+            ethnicity_group=effective_ethnicity,
+            use_ethnicity_prior=effective_use_prior,
+        )
 
     # ------------------------------------------------------------------
     # UI support — data retrieval for display (no clinical logic)
@@ -217,6 +319,8 @@ def _build_result(
     pe: PredictionEngine,
     observed: list[str],
     excluded: list[str],
+    ethnicity_group: str = "",
+    use_ethnicity_prior: bool = False,
 ) -> QueryResult:
     """Assemble a full QueryResult from raw observed/excluded lists."""
     posterior = se.score_modules(observed, excluded)
@@ -240,7 +344,12 @@ def _build_result(
 
     top_module = next(mm for mm in all_modules if mm.module_id == top_module_id)
 
-    candidate_genes = gr.rank_genes(top_module_id, observed)
+    candidate_genes = gr.rank_genes(
+        top_module_id,
+        observed,
+        ethnicity_group=ethnicity_group,
+        use_ethnicity_prior=use_ethnicity_prior,
+    )
     phenotype_predictions = pe.predict_phenotypes(top_module_id, observed)
     next_questions = pe.suggest_next_questions(posterior, observed, excluded, k=5)
     if not next_questions:
